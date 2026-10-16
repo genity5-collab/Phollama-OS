@@ -148,7 +148,7 @@ function renderModelMenu() {
     card.setAttribute('role', 'option');
     card.setAttribute('aria-selected', m.selected ? 'true' : 'false');
     const status = model && model.trained
-      ? `<div class="mc-status trained">Trained · ${model.trainSteps.toLocaleString()} steps · loss ${Number(model.lastLoss).toFixed(3)}</div>`
+      ? `<div class="mc-status trained">${model._base ? 'Base training' : 'Trained'} · ${model.trainSteps.toLocaleString()} steps · loss ${Number(model.lastLoss).toFixed(3)}</div>`
       : `<div class="mc-status untrained">Not trained yet — needs training data</div>`;
     card.innerHTML = `
       <div class="mc-head">
@@ -226,9 +226,11 @@ function welcomeHTML() {
         </svg>
       </div>
       <h2>Nova AI</h2>
-      <p>Chat with <b>Nova 1.0</b>, a small language model trained from scratch — no external APIs, no pretrained weights. ${
+      <p>Chat with <b>Nova 1.0</b>, a small language model trained from scratch — no external APIs, everything local. ${
         model && model.trained
-          ? 'Your trained model is loaded and answering from its own predictions.'
+          ? (model._base
+              ? 'The model comes with base conversational training and answers from its own predictions. Use <b>Train</b> to teach it more with your own text.'
+              : 'Your trained model is loaded and answering from its own predictions.')
           : 'The model has not been trained yet. Open <b>Train</b> in the top bar to give it learning data — until then, replies are genuine but meaningless model noise.'
       }</p>
     </div>`;
@@ -318,7 +320,7 @@ async function handleSend() {
     // trained weights — never scripted replies.
     const seedIds = model.tokenizer.encode(text).slice(0, -1); // drop <eos>: we continue the text
     const maxTokens = Math.min(320, 60 + Math.floor(text.length / 2));
-    const out = await sampleAsync(seedIds, maxTokens, 0.85);
+    const out = trimReply(await sampleAsync(seedIds, maxTokens, 0.62));
 
     let content;
     const clean = out.trim();
@@ -350,6 +352,30 @@ async function handleSend() {
     renderChatList();
     renderMessages();
   }
+}
+
+/**
+ * Trims a raw continuation to a tidy reply-sized chunk: cut at the first
+ * sentence end (or a line break) within a readable window. The text itself
+ * is untouched model output — only where we stop reading is chosen.
+ */
+function trimReply(text) {
+  let t = String(text).replace(/\s+$/, '');
+  if (!t) return t;
+  const window = t.slice(0, 300);
+  let cut = -1;
+  for (let i = 0; i < window.length; i++) {
+    if ((window[i] === '.' || window[i] === '!' || window[i] === '?') &&
+        (i + 1 >= window.length || window[i + 1] === ' ' || window[i + 1] === '\n')) {
+      cut = i + 1;
+      break;
+    }
+  }
+  if (cut === -1) {
+    const nl = window.indexOf('\n', 20);
+    cut = nl !== -1 ? nl : 220;
+  }
+  return t.slice(0, cut).trim();
 }
 
 /** Runs generation in a microtask so the loading row paints first. */
@@ -495,11 +521,21 @@ function boot() {
       console.warn('Nova checkpoint unreadable, starting fresh.', e);
       model = new Nova1Model();
     }
+  } else if (window.NOVA_BASE_CHECKPOINT) {
+    try {
+      model = Nova1Model.fromJSON(window.NOVA_BASE_CHECKPOINT);
+      model._base = true; // base conversational training (train/corpus.txt)
+    } catch (e) {
+      console.warn('Base checkpoint unreadable, starting fresh.', e);
+      model = new Nova1Model();
+    }
   } else {
     model = new Nova1Model();
   }
   if (loadedFromStorage && model.trained) {
     setTimeout(() => toast('Loaded your trained Nova 1.0 from browser storage.', 'ok'), 400);
+  } else if (!loadedFromStorage && model._base && model.trained) {
+    setTimeout(() => toast('Nova 1.0 loaded with base conversational training.', 'ok'), 400);
   }
 
   // load chats

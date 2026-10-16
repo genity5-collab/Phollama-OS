@@ -188,7 +188,7 @@ class Nova1Model {
    */
   async train(text, opts) {
     opts = opts || {};
-    const epochs = Math.max(1, Math.min(opts.epochs || 5, 50));
+    const epochs = Math.max(1, Math.min(opts.epochs || 5, opts.epochCap || 50));
     const onProgress = opts.onProgress || null;
     const shouldCancel = opts.shouldCancel || (() => false);
 
@@ -207,7 +207,7 @@ class Nova1Model {
     for (let i = 0; i + context < ids.length; i++) starts.push(i);
     // For big corpora we take a random subsample of windows per epoch
     // (real SGD sampling) so training stays responsive in the browser.
-    const MAX_WINDOWS = 12000;
+    const MAX_WINDOWS = opts.maxWindows || 12000;
     const usedPerEpoch = Math.min(starts.length, MAX_WINDOWS);
 
     let lr = this.config.lr;
@@ -237,7 +237,7 @@ class Nova1Model {
       if (!Number.isFinite(this.lastLoss)) {
         throw new Error('Training diverged (numerical overflow). Try fewer epochs or shorter text.');
       }
-      lr = Math.max(0.005, lr * this.config.lrDecay);
+      lr = Math.max(0.015, lr * this.config.lrDecay);
       if (onProgress) {
         onProgress({ epoch: e + 1, epochs, step, loss: this.lastLoss, sample: this.generate(120, 0.8) });
       }

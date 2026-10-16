@@ -1,0 +1,3 @@
+train/*.log
+train/last-checkpoint.json
+node_modules/
