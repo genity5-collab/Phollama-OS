@@ -89,6 +89,7 @@ const MAX_SEQS = parseInt(process.env.MAX_SEQS || process.env.MAX_WINDOWS || '40
 
   const m2 = Nova1Model.fromJSON(JSON.parse(out.slice(out.indexOf('] = ') + 4, out.lastIndexOf('}') + 1)));
   for (const seed of ['Hello', 'What is your name', 'What is a transformer', 'What can Supernova do']) {
-    console.log('seed ' + JSON.stringify(seed) + ' -> ' + JSON.stringify(m2.generate(100, 0.62, m2.tokenizer.encode(seed).slice(0, -1)).trim()).slice(0, 120));
+    const txt = await m2.generateAsync(100, 0.62, m2.tokenizer.encode(seed).slice(0, -1));
+    console.log('seed ' + JSON.stringify(seed) + ' -> ' + JSON.stringify(txt.trim()).slice(0, 120));
   }
 })().catch((e) => { console.error('TRAIN FAILED', e); process.exit(1); });
