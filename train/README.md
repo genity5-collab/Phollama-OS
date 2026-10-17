@@ -35,6 +35,15 @@ the owner having to do anything by hand.
 - A checkpoint saved in the visitor's own localStorage always wins over the
   base one. **Reset model** returns to a fresh untrained network.
 
+## Model architecture (v2, researched)
+
+`js/model.js` implements a minGPT/microgpt-style transformer: learned token +
+position embeddings (output head tied to token embeddings), nLayer blocks of
+pre-LN causal self-attention (nHead heads) + GELU MLP, final LayerNorm, Adam
+optimizer with per-epoch LR decay. Backprop was verified with finite-difference
+gradient checks. Research sources: karpathy/minGPT (architecture + Adam recipe)
+and jayyvk/trainmyowngpt (JS-only browser training of the same design).
+
 ## Honesty note
 
 The base weights are produced by this repo's own training script on this

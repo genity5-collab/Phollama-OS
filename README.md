@@ -9,6 +9,13 @@ Project name: `nova` · Model: `Nova 1.0` (model ID `nova-1.0`)
 
 ## What is implemented (honestly)
 
+> **Architecture note:** Nova 1.0's core is a tiny decoder-only transformer
+> (a minGPT/microgpt-style GPT — token+position embeddings, causal
+> self-attention, GELU MLPs, Adam optimizer), implemented from scratch in
+> plain JS. The earlier fixed-window neural LM plateaued at garbled speech;
+> this upgrade is the researched fix (karpathy/minGPT, jayyvk/trainmyowngpt —
+> the latter proves models this size train in seconds in pure JS).
+
 - **Chat interface** — conversation history, new chat, multiline composer
   (Enter to send, Shift+Enter for newline), loading indicator, error handling,
   formatted rendering of lists, bold text, inline code and code blocks. Every

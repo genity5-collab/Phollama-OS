@@ -21,9 +21,10 @@ const src =
   '\nglobalThis.NovaTokenizer = NovaTokenizer; globalThis.Nova1Model = Nova1Model;';
 eval(src);
 
-const CONFIG = { context: 8, embedDim: 16, hiddenDim: 160, lr: 0.12, lrDecay: 0.8 };
-const EPOCHS = parseInt(process.env.EPOCHS || '55', 10);
-const MAX_WINDOWS = parseInt(process.env.MAX_WINDOWS || '15000', 10);
+// Tiny-GPT config (minGPT/microgpt style — see js/model.js header)
+const CONFIG = { blockSize: 48, dModel: 48, nHead: 2, nLayer: 2, lr: 1e-2, lrDecay: 0.985, lrFloor: 1e-3, batch: 12 };
+const EPOCHS = parseInt(process.env.EPOCHS || '250', 10);
+const MAX_WINDOWS = parseInt(process.env.MAX_WINDOWS || '360', 10);
 
 (async () => {
   const corpus = fs.readFileSync(path.join(__dirname, 'corpus.txt'), 'utf8');
@@ -50,7 +51,7 @@ const MAX_WINDOWS = parseInt(process.env.MAX_WINDOWS || '15000', 10);
   }
   const t0 = Date.now();
   if (process.env.CONTINUE === '1') {
-    m.config.lr = (m.lastLoss && m.lastLoss < 1) ? 0.015 : 0.03; // gentle when near-converged
+    m.config.lr = (m.lastLoss && m.lastLoss < 1) ? 1e-3 : 3e-3; // gentle when near-converged
   }
   const res = await m.train(corpus, {
     epochs: EPOCHS,
