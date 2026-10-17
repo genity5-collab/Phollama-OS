@@ -19,6 +19,7 @@ const MODELS = [
     project: 'nova',
     type: 'Custom, independently developed language model',
     status: 'Initial model',
+    chatTurn: true,
     deprecation: 'Being removed on November 1 — switch to Nova 1.5 or Supernova',
     arch: 'Tiny transformer (minGPT-style), ~64K parameters',
   },
@@ -28,6 +29,7 @@ const MODELS = [
     project: 'nova',
     type: 'Custom, independently developed language model',
     status: 'Improved model',
+    chatTurn: false, // flips to true after chat-format retrain
     arch: 'Larger context and depth than Nova 1.0, ~160K parameters',
   },
   {
@@ -418,7 +420,9 @@ async function handleSend() {
     // Generation seeds with your message: Nova continues it from its own
     // next-token predictions. Real sampling from real weights, never scripted.
     // chat-turn format: seed with the user's turn, Nova answers in its own turn
-    const seedIds = model.tokenizer.encode('You: ' + text).slice(0, -1);
+    const meta0 = MODELS.find((m) => m.id === activeModelId);
+    const chatTurn = !!(meta0 && meta0.chatTurn);
+    const seedIds = model.tokenizer.encode((chatTurn ? 'You: ' : '') + text).slice(0, -1);
     const maxTokens = Math.min(340, 60 + Math.floor(text.length / 2));
     // live thinking: stream tokens into the bubble as the model samples them
     const liveRow = el('div', 'msg assistant thinking', `
@@ -434,7 +438,7 @@ async function handleSend() {
           if (now - lastPaint > 40) { // throttle paints
             lastPaint = now;
             const bubble = liveRow.querySelector('.bubble');
-            const shown = extractNovaTurn(partial);
+            const shown = chatTurn ? extractNovaTurn(partial) : partial;
             if (bubble && shown.trim()) {
               bubble.innerHTML = '<span class="thinking-label">Thinking…</span>' + renderMarkdown(shown);
             }
@@ -444,7 +448,7 @@ async function handleSend() {
       }, 30);
     });
     liveRow.remove();
-    const out = trimReply(extractNovaTurn(raw));
+    const out = trimReply(chatTurn ? extractNovaTurn(raw) : raw);
 
     let content;
     const clean = out.trim();
