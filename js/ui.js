@@ -28,6 +28,7 @@ const MODELS = [
     project: 'nova',
     type: 'Custom, independently developed language model',
     status: 'Experimental',
+    chatTurn: true,
     arch: 'Largest Nova model, ~570K parameters, 96-char context',
     planned: ['Image generation (planned — not yet available)', 'Tools (planned — not yet available)'],
   },
