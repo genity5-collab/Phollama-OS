@@ -343,7 +343,7 @@ class Nova1Model {
       const id = tf.tidy(() => {
         const tokens2d = tf.tensor2d([ctx], [1, ctx.length], 'int32');
         const lg = this._forward(tokens2d);
-        const last = tf.slice(lg, [0, ctx.length - 1, 0], [1, 1, this.vocabSize]);
+        const last = tf.slice(lg, [0, ctx.length - 1, 0], [1, 1, Math.min(this.vocabSize, lg.shape[2])]);
         return this._sampleFrom(last.dataSync(), temperature);
       });
       if (id === NovaTokenizer.EOS) break;
