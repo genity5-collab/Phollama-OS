@@ -35,7 +35,7 @@ const MODELS = [
     project: 'nova',
     type: 'Custom, independently developed language model',
     status: 'Experimental',
-    arch: 'Largest Nova model, ~200K parameters',
+    arch: 'Largest Nova model, ~160K parameters',
     planned: ['Image generation (planned — not yet available)', 'Tools (planned — not yet available)'],
   },
 ];
