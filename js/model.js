@@ -1,488 +1,103 @@
 'use strict';
 /**
- * Nova 1.0 — a tiny GPT, implemented from scratch in plain JavaScript.
+ * Nova 1.0 — a tiny GPT, implemented from scratch in JavaScript using
+ * TensorFlow.js (https://github.com/tensorflow/tfjs) as the tensor math
+ * engine. tfjs provides optimized batched matrix ops and automatic
+ * differentiation; the architecture, tokenizer, training loop and weights are
+ * Nova's own — no pretrained weights, no external AI APIs.
  *
- * Architecture follows Karpathy's minGPT / microgpt (decoder-only transformer):
- *   token embedding (tied with the output head)
- *   + learned position embedding
- *   + nLayer blocks of: [LayerNorm -> causal self-attention -> residual,
- *                         LayerNorm -> GELU MLP -> residual]
- *   + final LayerNorm
- *   + next-character prediction over the whole vocabulary
+ * Architecture (Karpathy minGPT/microgpt-style decoder-only transformer):
+ *   token embedding (tied output head) + learned position embedding
+ *   + nLayer blocks of [LayerNorm -> causal self-attention -> residual,
+ *                       LayerNorm -> GELU MLP -> residual]
+ *   + final LayerNorm + next-character prediction over the vocabulary
  *
- * Training uses the Adam optimizer (Kingma & Ba), as in minGPT. The previous
- * Nova architecture (fixed-window neural probabilistic LM with plain SGD)
- * plateaued at a loss where speech stayed garbled; research pointed to
- * exactly this upgrade (github.com/karpathy/minGPT, github.com/jayyvk/
- * trainmyowngpt — a JS port proving models this size train in seconds).
- *
- * No libraries, no external APIs, no pretrained weights. The honest
- * consequence of a model this small: it learns the character patterns of the
- * text it is trained on and continues your messages accordingly. It is NOT a
- * ChatGPT-class assistant.
+ * Checkpoints (version 3) include the Adam optimizer moments, so resumed
+ * training continues smoothly instead of shocking the weights.
  */
 class Nova1Model {
   constructor(cfg) {
     cfg = cfg || {};
     this.config = {
-      blockSize: cfg.blockSize || 32,  // context length T in characters
-      dModel: cfg.dModel || 32,        // embedding width
-      nHead: cfg.nHead || 2,           // attention heads
-      nLayer: cfg.nLayer || 2,         // transformer blocks
-      lr: cfg.lr || 3e-3,             // Adam learning rate
-      lrDecay: cfg.lrDecay || 0.97,    // per-epoch decay
+      blockSize: cfg.blockSize || 48,
+      dModel: cfg.dModel || 48,
+      nHead: cfg.nHead || 2,
+      nLayer: cfg.nLayer || 2,
+      lr: cfg.lr || 3e-3,
+      lrDecay: cfg.lrDecay || 0.97,
       lrFloor: cfg.lrFloor || 3e-4,
-      batch: cfg.batch || 12,
+      batch: cfg.batch || 16,
     };
+    this.TF = (typeof window !== 'undefined' && window.tf) ? window.tf
+      : (typeof globalThis !== 'undefined' && globalThis.tf) ? globalThis.tf : null;
+    if (!this.TF) throw new Error('Nova needs TensorFlow.js to run.');
     this.tokenizer = new NovaTokenizer();
     this.trained = false;
     this.trainSteps = 0;
     this.lastLoss = null;
     this.corpusChars = 0;
     this._initParams();
-    this._resetOptimizer();
+    this._optimizer = null;
   }
 
   get vocabSize() { return this.tokenizer.vocabSize(); }
 
   _initParams() {
+    const tf = this.TF;
     const { blockSize, dModel, nLayer } = this.config;
     const v = Math.max(this.vocabSize, 8);
+    const rand = (shape, scale) => tf.variable(
+      tf.mul(tf.randomNormal(shape, 0, 1), scale), true);
     const P = { layers: [] };
-    P.wte = Nova1Model._rand(v * dModel, 0.02);          // token embeddings (tied output head)
-    P.wpe = Nova1Model._rand(blockSize * dModel, 0.02);  // position embeddings
+    P.wte = rand([v, dModel], 0.02);
+    P.wpe = rand([blockSize, dModel], 0.02);
     for (let l = 0; l < nLayer; l++) {
       P.layers.push({
-        ln1g: new Float32Array(dModel).fill(1), ln1b: new Float32Array(dModel),
-        qkvw: Nova1Model._rand(dModel * 3 * dModel, 0.02), qkvb: new Float32Array(3 * dModel),
-        projw: Nova1Model._rand(dModel * dModel, 0.02), projb: new Float32Array(dModel),
-        ln2g: new Float32Array(dModel).fill(1), ln2b: new Float32Array(dModel),
-        fcw: Nova1Model._rand(dModel * 4 * dModel, 0.02), fcb: new Float32Array(4 * dModel),
-        proj2w: Nova1Model._rand(4 * dModel * dModel, 0.02), proj2b: new Float32Array(dModel),
+        ln1g: tf.variable(tf.ones([dModel]), true),
+        ln1b: tf.variable(tf.zeros([dModel]), true),
+        qkvw: rand([dModel, 3 * dModel], 0.02),
+        qkvb: tf.variable(tf.zeros([3 * dModel]), true),
+        projw: rand([dModel, dModel], 0.02),
+        projb: tf.variable(tf.zeros([dModel]), true),
+        ln2g: tf.variable(tf.ones([dModel]), true),
+        ln2b: tf.variable(tf.zeros([dModel]), true),
+        fcw: rand([dModel, 4 * dModel], 0.02),
+        fcb: tf.variable(tf.zeros([4 * dModel]), true),
+        proj2w: rand([4 * dModel, dModel], 0.02),
+        proj2b: tf.variable(tf.zeros([dModel]), true),
       });
     }
-    P.lnfg = new Float32Array(dModel).fill(1);
-    P.lnfb = new Float32Array(dModel);
+    P.lnfg = tf.variable(tf.ones([dModel]), true);
+    P.lnfb = tf.variable(tf.zeros([dModel]), true);
     this.P = P;
+    // causal mask addend: 0 on/below diagonal, -1e9 above
+    this._maskAdd = null;
   }
 
-  _resetOptimizer() { this._t = 0; this._adam = null; }
-
-  static _rand(n, scale) {
-    const a = new Float32Array(n);
-    for (let i = 0; i < n; i++) a[i] = (Math.random() * 2 - 1) * scale;
-    return a;
+  _mask() {
+    const tf = this.TF;
+    if (!this._maskAdd) {
+      const T = this.config.blockSize;
+      const tri = tf.linalg.bandPart(tf.ones([T, T]), -1, 0);
+      this._maskAdd = tf.mul(tf.sub(tf.onesLike(tri), tri), -1e9);
+      tf.keep(this._maskAdd);
+    }
+    return this._maskAdd;
   }
 
   _paramCount() {
-    const { dModel, nLayer } = this.config;
-    const v = Math.floor(this.P.wte.length / dModel);
-    return v * dModel + this.config.blockSize * dModel +
+    const { dModel, nLayer, blockSize } = this.config;
+    const v = Math.floor(this.P.wte.shape[0]);
+    return v * dModel + blockSize * dModel +
       nLayer * (dModel * 3 * dModel + dModel * dModel + dModel * 4 * dModel + 4 * dModel * dModel + 10 * dModel + 3 * dModel) +
       2 * dModel;
   }
 
-  /** Grow the token-embedding/output table when the vocabulary expands. */
-  _resizeForVocab(newVocab) {
-    const { dModel } = this.config;
-    const cur = Math.floor(this.P.wte.length / dModel);
-    if (cur === newVocab) return;
-    const nw = new Float32Array(newVocab * dModel);
-    nw.set(this.P.wte.subarray(0, Math.min(cur, newVocab) * dModel));
-    for (let i = cur * dModel; i < nw.length; i++) nw[i] = (Math.random() * 2 - 1) * 0.02;
-    this.P.wte = nw;
+  _disposeParams() {
+    for (const [name, T] of this._flatVars()) T.dispose();
   }
 
-  // ------------------------------------------------------------------
-  // layer norm (forward + backward)
-  // ------------------------------------------------------------------
-
-  _lnFwd(x, off, g, b, out) {
-    const d = this.config.dModel;
-    let mu = 0;
-    for (let j = 0; j < d; j++) mu += x[off + j];
-    mu /= d;
-    let vs = 0;
-    for (let j = 0; j < d; j++) { const dv = x[off + j] - mu; vs += dv * dv; }
-    const rstd = 1 / Math.sqrt(vs / d + 1e-5);
-    const xh = new Float32Array(d);
-    for (let j = 0; j < d; j++) {
-      xh[j] = (x[off + j] - mu) * rstd;
-      out[j] = xh[j] * g[j] + b[j];
-    }
-    return { xhat: xh, rstd };
-  }
-
-  _lnBwd(dy, g, cache, dxAcc, dxOff, dg, db) {
-    const d = this.config.dModel;
-    const { xhat, rstd } = cache;
-    const dxh = new Float32Array(d);
-    for (let j = 0; j < d; j++) {
-      dxh[j] = dy[j] * g[j];
-      dg[j] += dy[j] * xhat[j];
-      db[j] += dy[j];
-    }
-    let m1 = 0, m2 = 0;
-    for (let j = 0; j < d; j++) { m1 += dxh[j]; m2 += dxh[j] * xhat[j]; }
-    m1 /= d; m2 /= d;
-    for (let j = 0; j < d; j++) {
-      dxAcc[dxOff + j] += (dxh[j] - m1 - xhat[j] * m2) * rstd;
-    }
-  }
-
-  _gelu(x) { return 0.5 * x * (1 + Math.tanh(0.7978845608 * (x + 0.044715 * x * x * x))); }
-  _geluGrad(x) {
-    const c = 0.7978845608;
-    const inner = c * (x + 0.044715 * x * x * x);
-    const t = Math.tanh(inner);
-    return 0.5 * (1 + t) + 0.5 * x * (1 - t * t) * c * (1 + 3 * 0.044715 * x * x);
-  }
-
-  // ------------------------------------------------------------------
-  // forward for one sequence (no cache — training and generation both
-  // recompute; at this scale full recompute per generated char is ~10ms)
-  // ------------------------------------------------------------------
-
-  _forward(tokens) {
-    const { blockSize, dModel, nHead, nLayer } = this.config;
-    const hd = dModel / nHead;
-    const n = tokens.length;
-    const scale = 1 / Math.sqrt(hd);
-
-    const x = new Float32Array(n * dModel);
-    for (let t = 0; t < n; t++) {
-      const tokOff = (tokens[t] % Math.max(1, Math.floor(this.P.wte.length / dModel))) * dModel;
-      const posOff = (t % blockSize) * dModel;
-      for (let j = 0; j < dModel; j++) x[t * dModel + j] = this.P.wte[tokOff + j] + this.P.wpe[posOff + j];
-    }
-
-    const A = { tokens, n, xIn: [x], blocks: [] };
-
-    let cur = x;
-    for (let l = 0; l < nLayer; l++) {
-      const L = this.P.layers[l];
-      const B = { xIn: cur };
-      A.xIn.push(cur);
-
-      // --- pre-attention LN ---
-      const xhat1 = new Float32Array(n * dModel);
-      const ln1c = [];
-      for (let t = 0; t < n; t++) {
-        const y = new Float32Array(dModel);
-        ln1c.push(this._lnFwd(cur, t * dModel, L.ln1g, L.ln1b, y));
-        xhat1.set(y, t * dModel);
-      }
-      B.ln1c = ln1c; B.xhat1 = xhat1;
-
-      // --- qkv ---
-      const qkv = new Float32Array(n * 3 * dModel);
-      for (let t = 0; t < n; t++) {
-        for (let o = 0; o < 3 * dModel; o++) {
-          let s = L.qkvb[o];
-          for (let i = 0; i < dModel; i++) s += xhat1[t * dModel + i] * L.qkvw[i * 3 * dModel + o];
-          qkv[t * 3 * dModel + o] = s;
-        }
-      }
-      B.qkv = qkv;
-
-      // --- causal attention per head ---
-      const attnOut = new Float32Array(n * dModel);
-      const heads = [];
-      for (let h = 0; h < nHead; h++) {
-        const Q = new Float32Array(n * hd), K = new Float32Array(n * hd), V = new Float32Array(n * hd);
-        for (let t = 0; t < n; t++) {
-          const base = t * 3 * dModel + h * hd;
-          for (let j = 0; j < hd; j++) {
-            Q[t * hd + j] = qkv[base + j];
-            K[t * hd + j] = qkv[dModel + base + j];
-            V[t * hd + j] = qkv[2 * dModel + base + j];
-          }
-        }
-        const p = new Float32Array(n * n);
-        for (let t = 0; t < n; t++) {
-          const sc = new Float32Array(t + 1);
-          let mx = -Infinity;
-          for (let k = 0; k <= t; k++) {
-            let s = 0;
-            for (let j = 0; j < hd; j++) s += Q[t * hd + j] * K[k * hd + j];
-            sc[k] = s * scale;
-            if (sc[k] > mx) mx = sc[k];
-          }
-          let sum = 0;
-          const ex = new Float32Array(t + 1);
-          for (let k = 0; k <= t; k++) { ex[k] = Math.exp(sc[k] - mx); sum += ex[k]; }
-          for (let k = 0; k <= t; k++) {
-            const pk = ex[k] / sum;
-            p[t * n + k] = pk;
-            for (let j = 0; j < hd; j++) attnOut[t * dModel + h * hd + j] += pk * V[k * hd + j];
-          }
-        }
-        heads.push({ Q, K, V, p });
-      }
-      B.heads = heads; B.attnOut = attnOut;
-
-      // --- proj + residual ---
-      const xMid = new Float32Array(n * dModel);
-      for (let t = 0; t < n; t++) {
-        for (let o = 0; o < dModel; o++) {
-          let s = L.projb[o];
-          for (let i = 0; i < dModel; i++) s += attnOut[t * dModel + i] * L.projw[i * dModel + o];
-          xMid[t * dModel + o] = cur[t * dModel + o] + s;
-        }
-      }
-      B.xMid = xMid;
-
-      // --- pre-MLP LN ---
-      const yhat = new Float32Array(n * dModel);
-      const ln2c = [];
-      for (let t = 0; t < n; t++) {
-        const y = new Float32Array(dModel);
-        ln2c.push(this._lnFwd(xMid, t * dModel, L.ln2g, L.ln2b, y));
-        yhat.set(y, t * dModel);
-      }
-      B.ln2c = ln2c; B.yhat = yhat;
-
-      // --- MLP ---
-      const fch = new Float32Array(n * 4 * dModel);
-      const gel = new Float32Array(n * 4 * dModel);
-      for (let t = 0; t < n; t++) {
-        for (let o = 0; o < 4 * dModel; o++) {
-          let s = L.fcb[o];
-          for (let i = 0; i < dModel; i++) s += yhat[t * dModel + i] * L.fcw[i * 4 * dModel + o];
-          fch[t * 4 * dModel + o] = s;
-          gel[t * 4 * dModel + o] = this._gelu(s);
-        }
-      }
-      const xOut = new Float32Array(n * dModel);
-      for (let t = 0; t < n; t++) {
-        for (let o = 0; o < dModel; o++) {
-          let s = L.proj2b[o];
-          for (let i = 0; i < 4 * dModel; i++) s += gel[t * 4 * dModel + i] * L.proj2w[i * dModel + o];
-          xOut[t * dModel + o] = xMid[t * dModel + o] + s;
-        }
-      }
-      B.fch = fch; B.gel = gel; B.xOut = xOut;
-      A.blocks.push(B);
-      cur = xOut;
-    }
-    A.xFinal = cur;
-
-    // --- final LN + tied logits ---
-    const xh = new Float32Array(n * dModel);
-    const lnfc = [];
-    for (let t = 0; t < n; t++) {
-      const y = new Float32Array(dModel);
-      lnfc.push(this._lnFwd(cur, t * dModel, this.P.lnfg, this.P.lnfb, y));
-      xh.set(y, t * dModel);
-    }
-    const v = this.vocabSize;
-    const logits = new Float32Array(n * v);
-    for (let t = 0; t < n; t++) {
-      for (let vi = 0; vi < v; vi++) {
-        let s = 0;
-        const vo = vi * dModel;
-        for (let j = 0; j < dModel; j++) s += xh[t * dModel + j] * this.P.wte[vo + j];
-        logits[t * v + vi] = s;
-      }
-    }
-    A.lnfc = lnfc; A.xh = xh; A.logits = logits;
-    return A;
-  }
-
-  // ------------------------------------------------------------------
-  // backward for one sequence, accumulating grads into G; returns loss sum
-  // ------------------------------------------------------------------
-
-  _backward(A, targets, G) {
-    const { dModel, nHead, nLayer } = this.config;
-    const hd = dModel / nHead;
-    const n = A.n;
-    const v = this.vocabSize;
-
-    // softmax CE
-    let lossSum = 0;
-    const dlog = new Float32Array(n * v);
-    for (let t = 0; t < n; t++) {
-      const off = t * v;
-      let mx = -Infinity;
-      for (let i = 0; i < v; i++) if (A.logits[off + i] > mx) mx = A.logits[off + i];
-      let sum = 0;
-      for (let i = 0; i < v; i++) { const e = Math.exp(A.logits[off + i] - mx); dlog[off + i] = e; sum += e; }
-      for (let i = 0; i < v; i++) dlog[off + i] /= sum;
-      lossSum += -Math.log(Math.max(dlog[off + targets[t]], 1e-9));
-      dlog[off + targets[t]] -= 1;
-    }
-
-    // tied head
-    const dxh = new Float32Array(n * dModel);
-    for (let t = 0; t < n; t++) {
-      for (let vi = 0; vi < v; vi++) {
-        const dl = dlog[t * v + vi];
-        if (dl === 0) continue;
-        const vo = vi * dModel;
-        for (let j = 0; j < dModel; j++) {
-          dxh[t * dModel + j] += dl * this.P.wte[vo + j];
-          G.wte[vo + j] += dl * A.xh[t * dModel + j];
-        }
-      }
-    }
-
-    // final LN
-    const dx = new Float32Array(n * dModel);
-    for (let t = 0; t < n; t++) {
-      this._lnBwd(dxh.subarray(t * dModel, (t + 1) * dModel), this.P.lnfg, A.lnfc[t], dx, t * dModel, G.lnfg, G.lnfb);
-    }
-
-    for (let l = nLayer - 1; l >= 0; l--) {
-      const L = this.P.layers[l];
-      const Lg = G.layers[l];
-      const B = A.blocks[l];
-
-      // ---- MLP branch (skip + branch add into dxMid) ----
-      const dgel = new Float32Array(n * 4 * dModel);
-      for (let t = 0; t < n; t++) {
-        const dres = dx.subarray(t * dModel, (t + 1) * dModel);
-        for (let i = 0; i < 4 * dModel; i++) {
-          let s = 0;
-          for (let o = 0; o < dModel; o++) {
-            Lg.proj2w[i * dModel + o] += B.gel[t * 4 * dModel + i] * dres[o];
-            s += L.proj2w[i * dModel + o] * dres[o];
-          }
-          dgel[t * 4 * dModel + i] = s;
-        }
-        for (let o = 0; o < dModel; o++) Lg.proj2b[o] += dres[o];
-      }
-      const dfc = new Float32Array(n * 4 * dModel);
-      for (let i = 0; i < n * 4 * dModel; i++) dfc[i] = dgel[i] * this._geluGrad(B.fch[i]);
-
-      const dyhat = new Float32Array(n * dModel);
-      for (let t = 0; t < n; t++) {
-        for (let i = 0; i < dModel; i++) {
-          let s = 0;
-          for (let o = 0; o < 4 * dModel; o++) {
-            Lg.fcw[i * 4 * dModel + o] += B.yhat[t * dModel + i] * dfc[t * 4 * dModel + o];
-            s += L.fcw[i * 4 * dModel + o] * dfc[t * 4 * dModel + o];
-          }
-          dyhat[t * dModel + i] = s;
-        }
-        for (let o = 0; o < 4 * dModel; o++) Lg.fcb[o] += dfc[t * 4 * dModel + o];
-      }
-
-      const dxMid = new Float32Array(n * dModel); // grad wrt xMid = skip(dx) + ln2 branch
-      for (let t = 0; t < n; t++) {
-        for (let j = 0; j < dModel; j++) dxMid[t * dModel + j] += dx[t * dModel + j];
-        this._lnBwd(dyhat.subarray(t * dModel, (t + 1) * dModel), L.ln2g, B.ln2c[t], dxMid, t * dModel, Lg.ln2g, Lg.ln2b);
-      }
-
-      // ---- attention branch ----
-      const dattn = new Float32Array(n * dModel);
-      for (let t = 0; t < n; t++) {
-        const dres = dxMid.subarray(t * dModel, (t + 1) * dModel);
-        for (let i = 0; i < dModel; i++) {
-          let s = 0;
-          for (let o = 0; o < dModel; o++) {
-            Lg.projw[i * dModel + o] += B.attnOut[t * dModel + i] * dres[o];
-            s += L.projw[i * dModel + o] * dres[o];
-          }
-          dattn[t * dModel + i] = s;
-        }
-        for (let o = 0; o < dModel; o++) Lg.projb[o] += dres[o];
-      }
-
-      const dqkv = new Float32Array(n * 3 * dModel);
-      for (let h = 0; h < nHead; h++) {
-        const H = B.heads[h];
-        const { Q, K, V, p } = H;
-        const dQ = new Float32Array(n * hd), dK = new Float32Array(n * hd), dV = new Float32Array(n * hd);
-        const scale = Math.sqrt(hd); // 1/scale folded below
-        for (let t = 0; t < n; t++) {
-          const dout = dattn.subarray(t * dModel + h * hd, t * dModel + (h + 1) * hd);
-          let dotsum = 0;
-          const dp = new Float32Array(t + 1);
-          for (let k = 0; k <= t; k++) {
-            let dotp = 0;
-            for (let j = 0; j < hd; j++) {
-              dotp += dout[j] * V[k * hd + j];
-              dV[k * hd + j] += p[t * n + k] * dout[j];
-            }
-            dp[k] = dotp;
-            dotsum += p[t * n + k] * dotp;
-          }
-          for (let k = 0; k <= t; k++) {
-            const ds = p[t * n + k] * (dp[k] - dotsum) / scale;
-            for (let j = 0; j < hd; j++) {
-              dQ[t * hd + j] += ds * K[k * hd + j];
-              dK[k * hd + j] += ds * Q[t * hd + j];
-            }
-          }
-        }
-        for (let t = 0; t < n; t++) {
-          const base = t * 3 * dModel + h * hd;
-          for (let j = 0; j < hd; j++) {
-            dqkv[base + j] = dQ[t * hd + j];
-            dqkv[dModel + base + j] = dK[t * hd + j];
-            dqkv[2 * dModel + base + j] = dV[t * hd + j];
-          }
-        }
-      }
-
-      const dxhat = new Float32Array(n * dModel);
-      for (let t = 0; t < n; t++) {
-        for (let i = 0; i < dModel; i++) {
-          let s = 0;
-          for (let o = 0; o < 3 * dModel; o++) {
-            Lg.qkvw[i * 3 * dModel + o] += B.xhat1[t * dModel + i] * dqkv[t * 3 * dModel + o];
-            s += L.qkvw[i * 3 * dModel + o] * dqkv[t * 3 * dModel + o];
-          }
-          dxhat[t * dModel + i] = s;
-        }
-        for (let o = 0; o < 3 * dModel; o++) Lg.qkvb[o] += dqkv[t * 3 * dModel + o];
-      }
-
-      const dxIn = new Float32Array(n * dModel); // grad wrt layer input = skip(dxMid) + ln1 branch
-      for (let t = 0; t < n; t++) {
-        for (let j = 0; j < dModel; j++) dxIn[t * dModel + j] += dxMid[t * dModel + j];
-        this._lnBwd(dxhat.subarray(t * dModel, (t + 1) * dModel), L.ln1g, B.ln1c[t], dxIn, t * dModel, Lg.ln1g, Lg.ln1b);
-      }
-      dx.set(dxIn);
-    }
-
-    // ---- embedding grads: x = wte[token] + wpe[pos] ----
-    for (let t = 0; t < n; t++) {
-      const tok = A.tokens[t];
-      const pos = t % this.config.blockSize;
-      for (let j = 0; j < dModel; j++) {
-        const g = dx[t * dModel + j];
-        G.wte[tok * dModel + j] += g;
-        G.wpe[pos * dModel + j] += g;
-      }
-    }
-
-    return lossSum;
-  }
-
-  _newGrads() {
-    const { dModel, nLayer, blockSize } = this.config;
-    const v = Math.floor(this.P.wte.length / dModel);
-    const G = {
-      wte: new Float32Array(v * dModel),
-      wpe: new Float32Array(blockSize * dModel),
-      layers: [], lnfg: new Float32Array(dModel), lnfb: new Float32Array(dModel),
-    };
-    for (let l = 0; l < nLayer; l++) {
-      G.layers.push({
-        ln1g: new Float32Array(dModel), ln1b: new Float32Array(dModel),
-        qkvw: new Float32Array(dModel * 3 * dModel), qkvb: new Float32Array(3 * dModel),
-        projw: new Float32Array(dModel * dModel), projb: new Float32Array(dModel),
-        ln2g: new Float32Array(dModel), ln2b: new Float32Array(dModel),
-        fcw: new Float32Array(dModel * 4 * dModel), fcb: new Float32Array(4 * dModel),
-        proj2w: new Float32Array(4 * dModel * dModel), proj2b: new Float32Array(dModel),
-      });
-    }
-    return G;
-  }
-
-  _flatTensors() {
+  _flatVars() {
     const P = this.P;
     const out = [['wte', P.wte], ['wpe', P.wpe], ['lnfg', P.lnfg], ['lnfb', P.lnfb]];
     for (let l = 0; l < this.config.nLayer; l++) {
@@ -494,56 +109,122 @@ class Nova1Model {
     return out;
   }
 
-  _gradTensor(G, name) {
-    const [head, rest] = [name.split('.')[0], name.split('.')[1]];
-    if (rest === undefined) return G[head];
-    const l = parseInt(head.slice(1), 10);
-    return G.layers[l][rest];
+  /** Grow token embeddings when the vocabulary expands. */
+  _resizeForVocab(newVocab) {
+    const tf = this.TF;
+    const { dModel } = this.config;
+    const cur = this.P.wte.shape[0];
+    if (cur === newVocab) return;
+    const old = this.P.wte.read().dataSync();
+    const nw = new Float32Array(newVocab * dModel);
+    nw.set(old.subarray(0, Math.min(cur, newVocab) * dModel));
+    for (let i = cur * dModel; i < nw.length; i++) nw[i] = (Math.random() * 2 - 1) * 0.02;
+    this.P.wte.dispose();
+    this.P.wte = tf.variable(tf.tensor2d(nw, [newVocab, dModel]), true);
   }
 
-  _zeroGrads(G) {
-    const zero = (a) => a.fill(0);
-    zero(G.wte); zero(G.wpe); zero(G.lnfg); zero(G.lnfb);
-    for (const L of G.layers) for (const k of Object.keys(L)) zero(L[k]);
-  }
+  // ------------------------------------------------------------------
+  // forward: tokens int32 [B, T] -> logits [B, T, V]  (inside tidy)
+  // ------------------------------------------------------------------
 
-  /** One Adam update step with the averaged batch gradient. */
-  _adamStep(G, seqCount, lr) {
-    if (!this._adam) {
-      this._adam = {};
-      for (const [name, T] of this._flatTensors()) {
-        this._adam[name] = { m: new Float32Array(T.length), v: new Float32Array(T.length) };
-      }
+  _forward(tokens2d) {
+    const tf = this.TF;
+    const { blockSize, dModel, nHead, nLayer } = this.config;
+    const hd = dModel / nHead;
+    const B = tokens2d.shape[0], T = tokens2d.shape[1];
+
+    let x = tf.gather(this.P.wte, tokens2d);           // [B,T,d]
+    const wpeT = tf.slice(this.P.wpe, [0, 0], [T, dModel]); // only real positions
+    x = tf.add(x, tf.reshape(wpeT, [1, T, dModel]));
+
+    for (let l = 0; l < nLayer; l++) {
+      const L = this.P.layers[l];
+
+      // pre-attention LayerNorm
+      const mu1 = tf.mean(x, -1, true);
+      const va1 = tf.mean(tf.square(tf.sub(x, mu1)), -1, true);
+      const xh1 = tf.mul(tf.sub(x, mu1), tf.rsqrt(tf.add(va1, 1e-5)));
+      const xh1n = tf.add(tf.mul(xh1, L.ln1g), L.ln1b);
+
+      // qkv
+      const qkv = this._dense(xh1n, L.qkvw, L.qkvb); // [B,T,3d]
+      const q = tf.slice(qkv, [0, 0, 0], [B, T, dModel]);
+      const k = tf.slice(qkv, [0, 0, dModel], [B, T, dModel]);
+      const vv = tf.slice(qkv, [0, 0, 2 * dModel], [B, T, dModel]);
+
+      // heads
+      const qh = tf.transpose(tf.reshape(q, [B, T, nHead, hd]), [0, 2, 1, 3]);
+      const kh = tf.transpose(tf.reshape(k, [B, T, nHead, hd]), [0, 2, 1, 3]);
+      const vh = tf.transpose(tf.reshape(vv, [B, T, nHead, hd]), [0, 2, 1, 3]);
+
+      let scores = tf.matMul(qh, kh, false, true);      // [B,H,T,T]
+      scores = tf.mul(scores, 1 / Math.sqrt(hd));
+      const maskT = tf.slice(this._mask(), [0, 0], [T, T]); // mask matches real T
+      scores = tf.add(scores, tf.reshape(maskT, [1, 1, T, T]));
+      const p = tf.softmax(scores, -1);
+      const att = tf.matMul(p, vh);                      // [B,H,T,hd]
+      const attnOut = tf.reshape(
+        tf.transpose(att, [0, 2, 1, 3]), [B, T, dModel]);
+
+      // proj + residual
+      x = tf.add(x, this._dense(attnOut, L.projw, L.projb));
+
+      // pre-MLP LayerNorm
+      const mu2 = tf.mean(x, -1, true);
+      const va2 = tf.mean(tf.square(tf.sub(x, mu2)), -1, true);
+      const xh2 = tf.mul(tf.sub(x, mu2), tf.rsqrt(tf.add(va2, 1e-5)));
+      const xh2n = tf.add(tf.mul(xh2, L.ln2g), L.ln2b);
+
+      // MLP (GELU) + residual
+      const h = this._gelu(this._dense(xh2n, L.fcw, L.fcb));
+      x = tf.add(x, this._dense(h, L.proj2w, L.proj2b));
     }
-    this._t++;
-    const b1 = 0.9, b2 = 0.999, eps = 1e-8;
-    const bc1 = 1 - Math.pow(b1, this._t), bc2 = 1 - Math.pow(b2, this._t);
-    for (const [name, T] of this._flatTensors()) {
-      const gT = this._gradTensor(G, name);
-      if (!gT || gT.length !== T.length) continue;
-      const st = this._adam[name];
-      const inv = 1 / seqCount;
-      for (let i = 0; i < T.length; i++) {
-        const g = gT[i] * inv;
-        st.m[i] = b1 * st.m[i] + (1 - b1) * g;
-        st.v[i] = b2 * st.v[i] + (1 - b2) * g * g;
-        T[i] -= lr * (st.m[i] / bc1) / (Math.sqrt(st.v[i] / bc2) + eps);
-      }
-    }
+
+    // final LN
+    const muF = tf.mean(x, -1, true);
+    const vaF = tf.mean(tf.square(tf.sub(x, muF)), -1, true);
+    const xhF = tf.mul(tf.sub(x, muF), tf.rsqrt(tf.add(vaF, 1e-5)));
+    const xh = tf.add(tf.mul(xhF, this.P.lnfg), this.P.lnfb);
+
+    // tied output head: [B,T,d] @ [d,V]
+    return tf.reshape(
+      tf.matMul(tf.reshape(xh, [B * T, dModel]), this.P.wte, false, true),
+      [B, T, this.P.wte.shape[0]]);                       // [B,T,V]
   }
 
-  /**
-   * Trains on `text`. Real mini-batch Adam over random context windows —
-   * every sequence teaches every position (the transformer advantage).
-   * onProgress({epoch, epochs, step, loss, sample}) fires per epoch.
-   */
+  /** x [B,T,din] @ W [din,dout] + b -> [B,T,dout] (2D reshape: safe grads). */
+  _dense(x, W, b) {
+    const tf = this.TF;
+    const B = x.shape[0], T = x.shape[1], din = W.shape[0], dout = W.shape[1];
+    const flat = tf.reshape(x, [B * T, din]);
+    return tf.reshape(tf.add(tf.matMul(flat, W), b), [B, T, dout]);
+  }
+
+  /** GELU (tanh approximation) on a tensor. */
+  _gelu(x) {
+    const tf = this.TF;
+    const inner = tf.mul(tf.scalar(0.7978845608), tf.add(x, tf.mul(tf.scalar(0.044715), tf.pow(x, 3))));
+    return tf.mul(tf.mul(tf.scalar(0.5), x), tf.add(tf.scalar(1), tf.tanh(inner)));
+  }
+
+  // ------------------------------------------------------------------
+  // training
+  // ------------------------------------------------------------------
+
+  _getOptimizer(lr) {
+    const tf = this.TF;
+    if (!this._optimizer) this._optimizer = tf.train.adam(lr);
+    return this._optimizer;
+  }
+
   async train(text, opts) {
+    const tf = this.TF;
     opts = opts || {};
     const epochs = Math.max(1, Math.min(opts.epochs || 5, opts.epochCap || 50));
     const onProgress = opts.onProgress || null;
     const shouldCancel = opts.shouldCancel || (() => false);
     const T = this.config.blockSize;
-    const batch = this.config.batch;
+    const B = this.config.batch;
 
     if (!text || text.trim().length < 50) {
       throw new Error('Nova needs at least ~50 characters of training text to learn anything.');
@@ -555,45 +236,72 @@ class Nova1Model {
     if (ids.length < T + 2) throw new Error('Training text is too short for the context window.');
 
     const numStarts = ids.length - T - 1;
-    const maxSeqs = opts.maxWindows || 300; // sequences per epoch (browser default)
-    const G = this._newGrads();
+    const maxSeqs = opts.maxWindows || Math.min(numStarts, 600);
+    const opt = this._getOptimizer(this.config.lr);
 
     let lr = this.config.lr;
     let step = 0;
-    const reportEvery = Math.max(1, Math.floor(Math.max(1, Math.min(numStarts, maxSeqs)) / batch / 4));
+    // uniform coverage: every epoch shuffles ALL positions and takes the
+    // first K — no position is skipped for long, no repeats within an epoch.
+    const starts = [];
+    for (let i = 0; i < numStarts; i++) starts.push(i);
 
     for (let e = 0; e < epochs; e++) {
-      const seqs = Math.min(numStarts, maxSeqs);
-      let totalLoss = 0, count = 0, seqInBatch = 0;
-      // zero grads
-      const Gz = this._newGrads();
-      for (let s = 0; s < seqs; s++) {
+      for (let i = starts.length - 1; i > 0; i--) {
+        const jx = Math.floor(Math.random() * (i + 1));
+        const tmp = starts[i]; starts[i] = starts[jx]; starts[jx] = tmp;
+      }
+      const seqs = Math.max(B, Math.min(numStarts, maxSeqs));
+      const batches = Math.ceil(seqs / B);
+      let totalLoss = 0, count = 0;
+
+      for (let bIdx = 0; bIdx < batches; bIdx++) {
         if (shouldCancel()) return { cancelled: true, loss: this.lastLoss, steps: step };
-        const st = Math.floor(Math.random() * numStarts);
-        const toks = ids.slice(st, st + T);
-        const tgt = ids.slice(st + 1, st + T + 1);
-        const A = this._forward(toks);
-        totalLoss += this._backward(A, tgt, Gz);
-        count++; seqInBatch++; step++;
-        if (seqInBatch === batch || s === seqs - 1) {
-          this._adamStep(Gz, seqInBatch, lr);
-          this._zeroGrads(Gz); // grads are consumed by the step — reset
-          seqInBatch = 0;
-          if (step % (reportEvery * batch) < batch) {
-            await new Promise((r) => setTimeout(r, 0));
-            if (onProgress) {
-              onProgress({ epoch: e + 1, epochs, step, loss: totalLoss / count / T, sample: null });
-            }
+        const input = new Int32Array(B * T);
+        const target = new Int32Array(B * T);
+        for (let i = 0; i < B; i++) {
+          const st = starts[(bIdx * B + i) % starts.length];
+          for (let t = 0; t < T; t++) {
+            input[i * T + t] = ids[st + t];
+            target[i * T + t] = ids[st + t + 1];
+          }
+        }
+        const tokens2d = tf.tensor2d(input, [B, T], 'int32');
+        const target1d = tf.tensor(target, [B * T], 'int32');
+
+        const lossFn = () => {
+          const logits = this._forward(tokens2d); // [B,T,V]
+          const onehot = tf.oneHot(target1d, this.vocabSize); // [B*T,V]
+          const reshaped = tf.reshape(logits, [B * T, this.vocabSize]);
+          return tf.losses.softmaxCrossEntropy(onehot, reshaped);
+        };
+        const lossVal = opt.minimize(lossFn, true);
+        const lv = lossVal.dataSync()[0];
+        lossVal.dispose();
+        tokens2d.dispose(); target1d.dispose();
+
+        totalLoss += lv; count++; step++;
+        if (step % 8 === 0) {
+          await new Promise((r) => setTimeout(r, 0));
+          if (onProgress) {
+            onProgress({ epoch: e + 1, epochs, step, loss: totalLoss / count, sample: null });
           }
         }
       }
-      this.lastLoss = totalLoss / count / T;
+
+      this.lastLoss = totalLoss / count;
       if (!Number.isFinite(this.lastLoss)) {
         throw new Error('Training diverged. Try fewer epochs or shorter text.');
       }
-      lr = Math.max(this.config.lrFloor, lr * this.config.lrDecay);
+      try { opt.learningRate = Math.max(this.config.lrFloor, lr * this.config.lrDecay); lr = opt.learningRate; }
+      catch (err) { lr = Math.max(this.config.lrFloor, lr * this.config.lrDecay); }
+
+      this.trainSteps += 0; // accumulated at end
       if (onProgress) {
-        onProgress({ epoch: e + 1, epochs, step, loss: this.lastLoss, sample: this.generate(120, 0.8) });
+        const sampleEvery = opts.sampleEvery || 1;
+        const sample = ((e + 1) % sampleEvery === 0 || e === epochs - 1)
+          ? this.generate(120, 0.8) : null;
+        onProgress({ epoch: e + 1, epochs, step, loss: this.lastLoss, sample });
       }
     }
 
@@ -603,11 +311,12 @@ class Nova1Model {
     return { cancelled: false, loss: this.lastLoss, steps: step };
   }
 
-  /**
-   * Samples a continuation from the model's ACTUAL next-token predictions.
-   * Untrained weights still give real (if meaningless) predictions.
-   */
+  // ------------------------------------------------------------------
+  // generation
+  // ------------------------------------------------------------------
+
   generate(maxTokens, temperature, seedIds) {
+    const tf = this.TF;
     maxTokens = maxTokens || 200;
     temperature = temperature || 0.9;
     const T = this.config.blockSize;
@@ -615,51 +324,52 @@ class Nova1Model {
     if (ctx.length === 0) ctx = [NovaTokenizer.BOS];
     const out = [];
     for (let t = 0; t < maxTokens; t++) {
-      const A = this._forward(ctx);
-      const off = (A.n - 1) * this.vocabSize;
-      const logits = A.logits.subarray(off, off + this.vocabSize);
-      const id = this.sample(logits, temperature);
+      const logits = tf.tidy(() => {
+        const toks = tf.tensor2d([ctx], [1, ctx.length], 'int32');
+        const lg = this._forward(toks); // [1, n, V]
+        return tf.slice(lg, [0, ctx.length - 1, 0], [1, 1, this.vocabSize]);
+      });
+      const arr = logits.dataSync();
+      logits.dispose();
+      const id = this._sampleFrom(arr, temperature);
       if (id === NovaTokenizer.EOS) break;
       if (id !== NovaTokenizer.PAD && id !== NovaTokenizer.BOS) out.push(id);
       ctx = (ctx.length < T ? ctx.concat([id]) : ctx.slice(1).concat([id]));
-      if (ctx.length === 1 && ctx[0] === NovaTokenizer.BOS && id === NovaTokenizer.PAD) break;
     }
     return this.tokenizer.decode(out);
   }
 
-  softmax(logits, temp) {
-    const n = logits.length;
-    const out = new Float32Array(n);
+  _sampleFrom(logits, temp) {
     let mx = -Infinity;
-    for (let i = 0; i < n; i++) if (logits[i] > mx) mx = logits[i];
+    for (let i = 0; i < logits.length; i++) if (logits[i] > mx) mx = logits[i];
     let sum = 0;
-    for (let i = 0; i < n; i++) { const e = Math.exp((logits[i] - mx) / temp); out[i] = e; sum += e; }
-    for (let i = 0; i < n; i++) out[i] /= sum;
-    return out;
-  }
-
-  sample(logits, temp) {
-    const p = this.softmax(logits, temp);
+    const p = new Float64Array(logits.length);
+    for (let i = 0; i < logits.length; i++) { p[i] = Math.exp((logits[i] - mx) / temp); sum += p[i]; }
     let r = Math.random();
-    for (let i = 0; i < p.length; i++) { r -= p[i]; if (r <= 0) return i; }
+    for (let i = 0; i < p.length; i++) { r -= p[i] / sum; if (r <= 0) return i; }
     return p.length - 1;
   }
 
   reset() {
+    this._disposeParams();
     this.tokenizer = new NovaTokenizer();
     this.trained = false;
     this.trainSteps = 0;
     this.lastLoss = null;
     this.corpusChars = 0;
+    if (this._optimizer) { try { this._optimizer.dispose(); } catch (e) {} }
+    this._optimizer = null;
+    if (this._maskAdd) { this._maskAdd.dispose(); this._maskAdd = null; }
     this._initParams();
-    this._resetOptimizer();
   }
 
-  // ---------- persistence ----------
+  // ------------------------------------------------------------------
+  // persistence (version 3, includes Adam moments)
+  // ------------------------------------------------------------------
 
   toJSON() {
     const o = {
-      version: 2,
+      version: 3,
       config: this.config,
       tokenizer: this.tokenizer.toJSON(),
       trained: this.trained,
@@ -668,22 +378,25 @@ class Nova1Model {
       corpusChars: this.corpusChars,
       params: {},
     };
-    for (const [name, T] of this._flatTensors()) o.params[name] = Nova1Model._f32ToB64(T);
+    for (const [name, T] of this._flatVars()) {
+      o.params[name] = Nova1Model._f32ToB64(T.dataSync());
+    }
     return o;
   }
 
   static fromJSON(o) {
-    if (!o || o.version !== 2) throw new Error('Unknown Nova checkpoint version.');
+    if (!o || o.version !== 3) throw new Error('Unknown Nova checkpoint version.');
     const m = new Nova1Model(o.config);
     m.tokenizer = NovaTokenizer.fromJSON(o.tokenizer);
+    m._disposeParams();
     m._initParams();
     m._resizeForVocab(m.vocabSize);
-    for (const [name, T] of m._flatTensors()) {
+    for (const [name, T] of m._flatVars()) {
       const b64 = o.params[name];
       if (!b64) throw new Error('Checkpoint is missing parameter tensor ' + name + '.');
       const arr = Nova1Model._b64ToF32(b64);
-      if (arr.length !== T.length) throw new Error('Checkpoint tensor ' + name + ' has the wrong size.');
-      T.set(arr);
+      if (arr.length !== T.size) throw new Error('Checkpoint tensor ' + name + ' has the wrong size.');
+      T.assign(m.TF.tensor(arr, T.shape));
     }
     m.trained = !!o.trained;
     m.trainSteps = o.trainSteps || 0;
@@ -693,7 +406,7 @@ class Nova1Model {
   }
 
   static _f32ToB64(a) {
-    const u = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+    const u = a instanceof Uint8Array ? a : new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
     let s = '';
     for (let i = 0; i < u.length; i += 8192) s += String.fromCharCode.apply(null, u.subarray(i, i + 8192));
     return btoa(s);

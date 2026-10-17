@@ -90,7 +90,7 @@
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="trainTitle">
       <h3 id="trainTitle">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#4dd6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4.5 13.5H11L9.5 22 19 10h-6.5L13 2z"/></svg>
-        Train Nova 1.0
+        Train <span id='trainTitleName'>Nova</span>
       </h3>
       <div class="modal-sub">Paste your own text below. Nova learns directly from it, in your browser, with real gradient-descent training. The more text, the better.</div>
 
@@ -118,10 +118,14 @@
 
   <div class="toasts" id="toasts"></div>
 
+  <!-- TensorFlow.js: the tensor math engine for Nova's models (no AI APIs, just math) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
   <script src="js/tokenizer.js"></script>
   <script src="js/model.js"></script>
   <script src="js/storage.js"></script>
-  <script src="js/base-checkpoint.js"></script>
+  <script src="js/base-checkpoints/nova-1.0.js"></script>
+  <script src="js/base-checkpoints/nova-1.5.js"></script>
+  <script src="js/base-checkpoints/supernova-1.0.js"></script>
   <script src="js/ui.js"></script>
 </body>
 </html>

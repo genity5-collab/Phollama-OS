@@ -1,0 +1,15 @@
+{
+  "name": "nova",
+  "version": "1.0.0",
+  "description": "A polished, mobile-first AI chatbot powered by **Nova 1.0** — a small language model built and trained **from scratch in JavaScript**, running entirely in the browser. No external AI APIs, no API keys, no pretrained weights, no paid dependencies.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@tensorflow/tfjs-node": "^4.22.0"
+  }
+}

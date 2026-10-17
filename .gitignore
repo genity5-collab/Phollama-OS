@@ -1,3 +1,5 @@
 train/*.log
 train/last-checkpoint.json
+train/last-checkpoint-*.json
 node_modules/
+package-lock.json

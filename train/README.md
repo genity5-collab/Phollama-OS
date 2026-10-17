@@ -1,63 +1,53 @@
-# Nova 1.0 training system (agent-run, not user-run)
+# Nova training system (agent-run, fast)
 
-This is the pipeline that produces the **base weights** every visitor of the
-site loads. It runs outside the browser, so the agent can retrain Nova without
-the owner having to do anything by hand.
+Trains the **base weights** every visitor of the site loads, using
+TensorFlow.js (tfjs-node, AVX-accelerated) — ~15-20x faster than the old
+pure-JS engine. A full Nova 1.0 retrain takes about two minutes.
 
-## The 3-step retrain loop
+## The 3-step retrain loop (no manual training needed for users)
 
-1. **Edit the lesson** — `train/corpus.txt` is plain text (currently a
-   conversational Q&A set). Add or change lines; more repetition = stronger
-   recall; more variety = more flexible phrasing.
-2. **Run training** — from the repo root:
+1. **Edit the lesson** — `train/corpus.txt` is plain text, one
+   `Question\nAnswer` pair per two lines.
+2. **Train one or all models**:
 
    ```
-   node train/train.js            # defaults: 55 epochs, 15k windows/epoch
-   EPOCHS=80 MAX_WINDOWS=25000 node train/train.js   # heavier run
+   node train/train.js                       # defaults to nova-1.0
+   MODEL=nova-1.5 node train/train.js        # the improved model
+   MODEL=supernova-1.0 node train/train.js   # the experimental big sibling
+   EPOCHS=35 MAX_SEQS=2000 node train/train.js   # knobs
+   CONTINUE=1 LR=1e-3 MODEL=nova-1.0 node train/train.js  # resume fine-tune
    ```
 
-   This trains a fresh Nova 1.0 with real SGD (same `js/model.js` the browser
-   uses) and overwrites `js/base-checkpoint.js` — the trained weights that
-   `index.html` ships as the default model. The run prints loss per epoch and
-   sanity-check generations at the end.
+   Each run writes `js/base-checkpoints/<model-id>.js` (trained default
+   weights shipped with the site) and keeps a resumable per-epoch checkpoint
+   at `train/last-checkpoint-<model>.json`.
 
-3. **Push** — `git add -A && git commit -m "Retrain Nova" && git push`.
-   GitHub Pages redeploys the site automatically. No other steps.
+3. **Push** — GitHub Pages redeploys the site automatically.
 
-## How the site uses the checkpoint
+## How the site uses checkpoints
 
-- `js/base-checkpoint.js` sets `window.NOVA_BASE_CHECKPOINT` (weights,
-  vocabulary with stable token IDs, config, loss, step count, `base: true`).
-- On first visit (nothing in localStorage) the app loads it, so Nova already
-  talks. The UI honestly labels this as **base training**.
-- The **Train** button still lets anyone train further on top of the base
-  weights, in their own browser.
-- A checkpoint saved in the visitor's own localStorage always wins over the
-  base one. **Reset model** returns to a fresh untrained network.
+- `js/base-checkpoints/*.js` register `window.NOVA_BASE_CHECKPOINTS['<id>']`
+  (weights + vocabulary with stable token IDs + config + loss/steps).
+- On first visit the app loads each model's base checkpoint, so Nova already
+  talks with zero manual training. The UI labels this as **base training**.
+- The **Train** button trains the selected model further, in the visitor's
+  own browser (tfjs WebGL), saved under `nova.model.<id>.v3` in localStorage.
+- A browser-saved checkpoint always wins over the shipped base. **Reset**
+  returns a model to a fresh untrained state.
 
-## Model architecture (v2, researched)
+## Model configs (in train/train.js)
 
-`js/model.js` implements a minGPT/microgpt-style transformer: learned token +
-position embeddings (output head tied to token embeddings), nLayer blocks of
-pre-LN causal self-attention (nHead heads) + GELU MLP, final LayerNorm, Adam
-optimizer with per-epoch LR decay. Backprop was verified with finite-difference
-gradient checks. Research sources: karpathy/minGPT (architecture + Adam recipe)
-and jayyvk/trainmyowngpt (JS-only browser training of the same design).
+| Model | Context | dModel | Layers | Heads | ~Params |
+|---|---|---|---|---|---|
+| nova-1.0 | 48 | 48 | 2 | 2 | 64K |
+| nova-1.5 | 64 | 56 | 3 | 2 | 122K |
+| supernova-1.0 | 80 | 64 | 3 | 4 | ~190K |
 
 ## Honesty note
 
-The base weights are produced by this repo's own training script on this
-repo's own corpus. They are not downloaded from any external AI provider, and
-no external inference API is used anywhere. The model is still the same small
-from-scratch network; it does not gain general knowledge, only the corpus
-patterns.
-
-## SmolTalk note (2026-10-17)
-
-Nova's corpus gained extra everyday-conversation pairs inspired by Hugging
-Face's SmolTalk chat data (`HuggingFaceTB/smol-smoltalk`, Apache-2.0). The
-public dataset endpoint only exposes long instruction-following examples
-(Python tasks, formatting rules), which do not fit Nova's tiny 48-character
-context, so the added pairs follow SmolTalk's everyday-conversation style
-instead of copying its long rows. Nova's weights remain 100% trained by this
-repo's own pipeline — no external model weights are used anywhere.
+All weights are produced by this repo's own training script on this repo's own
+corpus (plus SmolTalk-style everyday-conversation pairs; see
+train/smoltalk-extra.txt). No external model weights are used anywhere, and no
+external inference API is called — TensorFlow.js is a math engine, not an AI
+provider. The models still only know their corpus; planned Supernova features
+(image generation, tools) are not implemented and are labeled as planned.

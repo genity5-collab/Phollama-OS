@@ -1,92 +1,91 @@
 # Nova AI
 
-A polished, mobile-first AI chatbot powered by **Nova 1.0** — a small language
-model built and trained **from scratch in JavaScript**, running entirely in the
-browser. No external AI APIs, no API keys, no pretrained weights, no paid
-dependencies.
+A polished, mobile-first AI chatbot powered by the **Nova family** — small
+language models built and trained **from scratch**, running entirely in the
+browser. No external AI APIs, no API keys, no external pretrained weights, no
+paid dependencies. [TensorFlow.js](https://github.com/tensorflow/tfjs) is used
+purely as the tensor math engine (matrix ops + autodiff) — the architecture,
+tokenizer, corpus and weights are Nova's own.
 
-Project name: `nova` · Model: `Nova 1.0` (model ID `nova-1.0`)
+Project name: `nova`
+
+## The Nova family
+
+| Model | ID | Status | What it is |
+|---|---|---|---|
+| Nova 1.0 | `nova-1.0` | Initial model | Tiny transformer (~64K parameters) |
+| Nova 1.5 | `nova-1.5` | Improved model | Larger context + depth (~120K parameters) |
+| Nova Supernova 1.0 | `supernova-1.0` | Experimental | Largest Nova (~190K parameters). **Planned (not yet available): image generation, tools** |
+
+All three ship with **base conversational training** (trained by this repo's
+own pipeline, weights in `js/base-checkpoints/`), so chatting needs zero
+manual training. The **Train** button still lets anyone train any model
+further, locally, on their own text. Planned features are always labeled as
+planned — never as available.
 
 ## What is implemented (honestly)
-
-> **Architecture note:** Nova 1.0's core is a tiny decoder-only transformer
-> (a minGPT/microgpt-style GPT — token+position embeddings, causal
-> self-attention, GELU MLPs, Adam optimizer), implemented from scratch in
-> plain JS. The earlier fixed-window neural LM plateaued at garbled speech;
-> this upgrade is the researched fix (karpathy/minGPT, jayyvk/trainmyowngpt —
-> the latter proves models this size train in seconds in pure JS).
 
 - **Chat interface** — conversation history, new chat, multiline composer
   (Enter to send, Shift+Enter for newline), loading indicator, error handling,
   formatted rendering of lists, bold text, inline code and code blocks. Every
   visible button works.
-- **Nova 1.0 selector** — one model only, with its details shown. The
-  selector is registry-driven so more models can be added later; nothing
-  unavailable is ever shown as selectable.
-- **A real trainable model** — a Bengio-style neural probabilistic language
-  model written from scratch: character tokenizer → learned embeddings →
-  tanh hidden layer → softmax over the vocabulary. Forward pass,
-  backpropagation and SGD training are all real, implemented in plain JS.
-- **Custom tokenizer** — character-level, vocabulary built from your training
-  text, stable token IDs (fixed specials `0 <pad>`, `1 <unk>`, `2 <bos>`,
-  `3 <eos>`; characters get IDs 4+ in first-seen order). The vocabulary is
-  saved with the model so IDs never shift between sessions.
-- **Persistence** — model weights, vocabulary and chat history are saved to
-  `localStorage`. If storage is unavailable or full, Nova degrades gracefully
-  to memory-only mode with a clear notice. Nothing ever leaves your device.
-- **Training flow** — paste your own text, pick epochs, watch real loss and a
-  live sample per epoch, stop mid-training, or reset the model.
+- **Model selector** — three real, selectable models with full details; nothing
+  unavailable is shown as selectable.
+- **Real trainable models** — minGPT/microgpt-style decoder-only transformers
+  in `js/model.js`: tied token embeddings, learned position embeddings,
+  pre-LN causal self-attention, GELU MLPs, Adam optimizer (moments included in
+  checkpoints so resumed training continues smoothly). Backprop uses tfjs
+  autodiff; everything else (tokenizer, training loop, sampling, pipeline) is
+  this repo's own code.
+- **Custom tokenizer** — character-level with stable token IDs (fixed specials
+  `0-3`, printable ASCII `4-98`, newline `99`, corpus extras `100+`),
+  serialized with each model so IDs never shift.
+- **Persistence** — per-model weights + vocabulary + chat history in
+  `localStorage`, with quota/unavailable-storage handling. Nothing leaves the
+  device.
+- **Training system** — `train/` pipeline (agent-run, outside the browser,
+  ~15x faster than the old pure-JS engine): edit `train/corpus.txt`, run
+  `MODEL=<id> node train/train.js`, push; GitHub Pages redeploys.
+  Per-epoch resumable checkpoints; `CONTINUE=1` resumes fine-tuning.
 
-## What Nova 1.0 actually is (and is not)
+## Capability statement
 
-Nova 1.0 is genuinely trainable, but it is tiny. It learns character-level
-statistics and short-range phrasing from the text you give it and then
-generates continuations of your messages. It does **not** have general
-knowledge, reasoning, or ChatGPT-level intelligence, and it will never claim
-to. If it has not been trained, it says so and explains that training data is
-needed — its raw output is shown for exactly what it is: meaningless noise
-from untrained weights. Nothing in this app fakes AI replies.
-
-Responses are generated by continuing your message from the model's actual
-next-token predictions (seeded with your text). Training on dialogue-style
-corpora makes the continuations feel conversational.
+The Nova models are genuinely trainable but tiny. They learn the character
+patterns and phrasing of their training corpus and continue your messages
+accordingly. They do not have general knowledge, reasoning, or ChatGPT-level
+intelligence, and the UI never claims otherwise. Untrained models say so and
+show their genuine raw (meaningless) output. Nothing fakes AI replies.
 
 ## Running locally
 
-The app is fully static. Either open `index.html` directly, or serve the
-folder (nicer, closer to how it will be hosted):
-
 ```
 cd nova
-python3 -m http.server 8000
-# then open http://localhost:8000
+npm install           # tfjs-node for the training pipeline (site itself needs only the CDN)
+node train/train.js   # optional: train models
+python3 -m http.server 8000   # or any static server
 ```
 
-Deploying to any static host (GitHub Pages, etc.) works out of the box
-because all asset paths are relative.
+Deploying to any static host (GitHub Pages, etc.) works out of the box; all
+asset paths are relative and TensorFlow.js loads from the jsDelivr CDN.
 
 ## Project structure
 
 ```
 nova/
-  index.html        — app shell and layout
-  css/style.css     — Nova dark theme, responsive/mobile-first
-  js/tokenizer.js   — custom tokenizer with stable token IDs
-  js/model.js       — Nova 1.0: real neural LM (init, train, sample, persist)
-  js/storage.js     — safe localStorage wrappers with quota handling
-  js/ui.js          — chat UI, model selector, training flow
+  index.html                 — app shell
+  css/style.css              — Nova dark theme, responsive/mobile-first
+  js/tokenizer.js            — char tokenizer with stable token IDs
+  js/model.js                — Nova transformer (tfjs engine, Adam, checkpoints v3)
+  js/storage.js              — safe localStorage wrappers
+  js/ui.js                   — chat UI, model selector, training flow
+  js/base-checkpoints/       — trained base weights per model (shipped)
+  train/corpus.txt           — the conversation corpus Nova trains on
+  train/train.js             — fast training pipeline (MODEL=<id>)
   README.md
 ```
-
-## Base weights & the training system
-
-The site ships with **base conversational training** baked in: `js/base-checkpoint.js`
-is generated by the agent-run pipeline in `train/` (see `train/README.md`).
-Visitors get a Nova that already talks; the **Train** button still works on top
-of it. A model checkpoint saved in your own browser always wins over the base.
 
 ## GitHub
 
 This repository is structured to be synchronized with the GitHub repository
 named `nova`. No GitHub synchronization is claimed beyond what is actually
-configured and tested in this repo.
+configured and tested here.
