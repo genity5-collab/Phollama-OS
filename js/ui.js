@@ -19,7 +19,7 @@ const MODELS = [
     project: 'nova',
     type: 'Custom, independently developed language model',
     status: 'Improved model',
-    chatTurn: true
+    chatTurn: true,
     arch: 'Larger context and depth than Nova 1.0, ~160K parameters',
   },
   {
