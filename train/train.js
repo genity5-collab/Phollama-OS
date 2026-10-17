@@ -51,7 +51,8 @@ const MAX_WINDOWS = parseInt(process.env.MAX_WINDOWS || '360', 10);
   }
   const t0 = Date.now();
   if (process.env.CONTINUE === '1') {
-    m.config.lr = (m.lastLoss && m.lastLoss < 1) ? 1e-3 : 3e-3; // gentle when near-converged
+    m.config.lr = parseFloat(process.env.LR || '0') ||
+      ((m.lastLoss && m.lastLoss < 1) ? 1e-3 : 3e-3); // LR env overrides
   }
   const res = await m.train(corpus, {
     epochs: EPOCHS,

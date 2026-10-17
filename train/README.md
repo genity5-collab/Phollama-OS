@@ -51,3 +51,13 @@ repo's own corpus. They are not downloaded from any external AI provider, and
 no external inference API is used anywhere. The model is still the same small
 from-scratch network; it does not gain general knowledge, only the corpus
 patterns.
+
+## SmolTalk note (2026-10-17)
+
+Nova's corpus gained extra everyday-conversation pairs inspired by Hugging
+Face's SmolTalk chat data (`HuggingFaceTB/smol-smoltalk`, Apache-2.0). The
+public dataset endpoint only exposes long instruction-following examples
+(Python tasks, formatting rules), which do not fit Nova's tiny 48-character
+context, so the added pairs follow SmolTalk's everyday-conversation style
+instead of copying its long rows. Nova's weights remain 100% trained by this
+repo's own pipeline — no external model weights are used anywhere.
