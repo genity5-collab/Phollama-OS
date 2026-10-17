@@ -238,7 +238,7 @@ class Nova1Model {
     const numStarts = ids.length - T - 1;
     const maxSeqs = opts.maxWindows || Math.min(numStarts, 600);
     const opt = this._getOptimizer(this.config.lr);
-
+    this.config.lr0 = this.config.lr;
     let lr = this.config.lr;
     let step = 0;
     // uniform coverage: every epoch shuffles ALL positions and takes the
@@ -293,14 +293,20 @@ class Nova1Model {
       if (!Number.isFinite(this.lastLoss)) {
         throw new Error('Training diverged. Try fewer epochs or shorter text.');
       }
-      try { opt.learningRate = Math.max(this.config.lrFloor, lr * this.config.lrDecay); lr = opt.learningRate; }
-      catch (err) { lr = Math.max(this.config.lrFloor, lr * this.config.lrDecay); }
+      // LR schedule: cosine (nanoGPT-style) or exponential fallback
+      if (this.config.lrSchedule === 'cosine') {
+        const lo = this.config.lrFloor || 1e-4, hi = this.config.lr0 || this.config.lr;
+        lr = lo + (hi - lo) * 0.5 * (1 + Math.cos(Math.PI * (e / epochs)));
+      } else {
+        lr = Math.max(this.config.lrFloor, lr * this.config.lrDecay);
+      }
+      try { opt.learningRate = lr; } catch (err) { /* keep computed lr */ }
 
       this.trainSteps += 0; // accumulated at end
       if (onProgress) {
         const sampleEvery = opts.sampleEvery || 1;
-        const sample = ((e + 1) % sampleEvery === 0 || e === epochs - 1)
-          ? this.generate(120, 0.8) : null;
+        const wantSample = (e + 1) % sampleEvery === 0 || e === epochs - 1;
+        const sample = wantSample ? (await this.generateAsync(120, 0.8)).trim() : null;
         onProgress({ epoch: e + 1, epochs, step, loss: this.lastLoss, sample });
       }
     }

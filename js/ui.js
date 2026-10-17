@@ -28,7 +28,7 @@ const MODELS = [
     project: 'nova',
     type: 'Custom, independently developed language model',
     status: 'Improved model',
-    arch: 'Larger context and depth than Nova 1.0, ~120K parameters',
+    arch: 'Larger context and depth than Nova 1.0, ~160K parameters',
   },
   {
     id: 'supernova-1.0',
@@ -36,7 +36,7 @@ const MODELS = [
     project: 'nova',
     type: 'Custom, independently developed language model',
     status: 'Experimental',
-    arch: 'Largest Nova model, ~160K parameters',
+    arch: 'Largest Nova model, ~570K parameters, 96-char context',
     planned: ['Image generation (planned — not yet available)', 'Tools (planned — not yet available)'],
   },
 ];
@@ -342,6 +342,21 @@ function newChat() {
  * sentence end (or a line break) within a readable window. The text itself
  * is untouched model output — only where we stop reading is chosen.
  */
+
+/**
+ * Models are trained on "You: <q>\nNova: <a>" turns. A completion may echo
+ * the turn marker or bleed into the next question — keep only Nova's answer.
+ */
+function extractNovaTurn(text) {
+  let t = String(text || '');
+  const i = t.indexOf('Nova:');
+  if (i !== -1) t = t.slice(i + 5);
+  // stop if generation bled into the next user turn
+  const j = t.indexOf('You:');
+  if (j !== -1) t = t.slice(0, j);
+  return t.trim();
+}
+
 function trimReply(text) {
   let t = String(text).replace(/\s+$/, '');
   if (!t) return t;
@@ -402,7 +417,8 @@ async function handleSend() {
   try {
     // Generation seeds with your message: Nova continues it from its own
     // next-token predictions. Real sampling from real weights, never scripted.
-    const seedIds = model.tokenizer.encode(text).slice(0, -1);
+    // chat-turn format: seed with the user's turn, Nova answers in its own turn
+    const seedIds = model.tokenizer.encode('You: ' + text).slice(0, -1);
     const maxTokens = Math.min(340, 60 + Math.floor(text.length / 2));
     // live thinking: stream tokens into the bubble as the model samples them
     const liveRow = el('div', 'msg assistant thinking', `
@@ -418,8 +434,9 @@ async function handleSend() {
           if (now - lastPaint > 40) { // throttle paints
             lastPaint = now;
             const bubble = liveRow.querySelector('.bubble');
-            if (bubble && partial.trim()) {
-              bubble.innerHTML = '<span class="thinking-label">Thinking…</span>' + renderMarkdown(partial);
+            const shown = extractNovaTurn(partial);
+            if (bubble && shown.trim()) {
+              bubble.innerHTML = '<span class="thinking-label">Thinking…</span>' + renderMarkdown(shown);
             }
             scrollChat();
           }
@@ -427,7 +444,7 @@ async function handleSend() {
       }, 30);
     });
     liveRow.remove();
-    const out = trimReply(raw);
+    const out = trimReply(extractNovaTurn(raw));
 
     let content;
     const clean = out.trim();

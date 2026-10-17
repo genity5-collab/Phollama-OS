@@ -24,9 +24,9 @@ const src =
 eval(src);
 
 const MODELS = {
-  'nova-1.0': { blockSize: 48, dModel: 48, nHead: 2, nLayer: 2, lr: 3e-3, lrDecay: 0.985, lrFloor: 3e-4, batch: 16 },
-  'nova-1.5': { blockSize: 64, dModel: 56, nHead: 2, nLayer: 3, lr: 3e-3, lrDecay: 0.985, lrFloor: 3e-4, batch: 16 },
-  'supernova-1.0': { blockSize: 80, dModel: 64, nHead: 4, nLayer: 3, lr: 3e-3, lrDecay: 0.985, lrFloor: 3e-4, batch: 16 },
+  'nova-1.0': { blockSize: 64, dModel: 48, nHead: 2, nLayer: 2, lr: 3e-3, lrSchedule: 'cosine', lrFloor: 3e-4, batch: 16 },
+  'nova-1.5': { blockSize: 96, dModel: 64, nHead: 4, nLayer: 3, lr: 3e-3, lrSchedule: 'cosine', lrFloor: 3e-4, batch: 16 },
+  'supernova-1.0': { blockSize: 96, dModel: 96, nHead: 4, nLayer: 5, lr: 3e-3, lrSchedule: 'cosine', lrFloor: 3e-4, batch: 16 },
 };
 
 const MODEL_ID = process.env.MODEL || 'nova-1.0';
