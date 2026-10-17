@@ -14,22 +14,12 @@
    Planned features are displayed as planned, never as available. */
 const MODELS = [
   {
-    id: 'nova-1.0',
-    name: 'Nova 1.0',
-    project: 'nova',
-    type: 'Custom, independently developed language model',
-    status: 'Initial model',
-    chatTurn: true,
-    deprecation: 'Being removed on November 1 — switch to Nova 1.5 or Supernova',
-    arch: 'Tiny transformer (minGPT-style), ~64K parameters',
-  },
-  {
     id: 'nova-1.5',
     name: 'Nova 1.5',
     project: 'nova',
     type: 'Custom, independently developed language model',
     status: 'Improved model',
-    chatTurn: false, // flips to true after chat-format retrain
+    chatTurn: true
     arch: 'Larger context and depth than Nova 1.0, ~160K parameters',
   },
   {

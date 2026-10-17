@@ -51,3 +51,10 @@ train/smoltalk-extra.txt). No external model weights are used anywhere, and no
 external inference API is called — TensorFlow.js is a math engine, not an AI
 provider. The models still only know their corpus; planned Supernova features
 (image generation, tools) are not implemented and are labeled as planned.
+
+## 2026-10-17: publish push
+
+- nova-1.0 discontinued and removed from the site (registry, script tag,
+  checkpoint). Stored selections fall back to nova-1.5.
+- nova-1.5 and supernova-1.0 retrained on the 155-turn chat curriculum
+  (chat-turn format, digit math incl. times tables, daily chat, meta).
