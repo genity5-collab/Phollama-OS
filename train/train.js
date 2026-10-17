@@ -3,7 +3,7 @@
 /**
  * Nova training pipeline (agent-run, fast: TensorFlow.js backend).
  *
- *   MODEL=nova-1.5 node train/train.js          # train one model
+ *   MODEL=nova-1.9 node train/train.js          # train one model
  *   MODEL=nova-1.0 EPOCHS=200 node train/train.js
  *   CONTINUE=1 MODEL=... node train/train.js    # resume fine-tuning
  *
@@ -25,7 +25,7 @@ eval(src);
 
 const MODELS = {
 // nova-1.0 discontinued and removed from the site
-  'nova-1.5': { blockSize: 96, dModel: 64, nHead: 4, nLayer: 3, lr: 3e-3, lrSchedule: 'cosine', lrFloor: 3e-4, batch: 16 },
+  'nova-1.9': { blockSize: 96, dModel: 64, nHead: 4, nLayer: 3, lr: 3e-3, lrSchedule: 'cosine', lrFloor: 3e-4, batch: 16 },
   'supernova-1.0': { blockSize: 96, dModel: 96, nHead: 4, nLayer: 5, lr: 3e-3, lrSchedule: 'cosine', lrFloor: 3e-4, batch: 16 },
 };
 

@@ -14,8 +14,8 @@
    Planned features are displayed as planned, never as available. */
 const MODELS = [
   {
-    id: 'nova-1.5',
-    name: 'Nova 1.5',
+    id: 'nova-1.9',
+    name: 'Nova 1.9',
     project: 'nova',
     type: 'Custom, independently developed language model',
     status: 'Improved model',
@@ -34,7 +34,7 @@ const MODELS = [
   },
 ];
 
-const DEFAULT_MODEL_ID = 'nova-1.5';
+const DEFAULT_MODEL_ID = 'nova-1.9';
 
 /* ---------------- state ---------------- */
 
@@ -616,7 +616,7 @@ function boot() {
     $('storageBanner').classList.add('show');
   }
 
-  // active model (default: nova-1.5)
+  // active model (default: nova-1.9)
   let saved = NovaStorage.get('nova.activeModel.v1', null);
   if (!MODELS.some((m) => m.id === saved)) saved = DEFAULT_MODEL_ID;
   activeModelId = saved;

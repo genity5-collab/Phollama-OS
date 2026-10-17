@@ -812,3 +812,53 @@ You: Find (21 \div (6 + 1 - 4)) * 5?
 Nova: The answer is 35.
 You: Find 1^{234} + 4^6 \div 4^4?
 Nova: The answer is 17.
+You: Let f(x) = 3x-8 and g(f(x)) = 2x^2 + 5x - 3. Find g(-5)?
+Nova: The answer is 4.
+You: Given that 2^x+ 2^x+ 2^x+ 2^x= 512, what is the value of x?
+Nova: The answer is 7.
+You: What is the value of 23^2 + 2(23)(2) + 2^2?
+Nova: The answer is 625.
+You: If 3+a=4-b and 4+b=7+a, what is 3-a?
+Nova: The answer is 4.
+You: What is the least value of y such that 3y^2 + 5y + 2 = 4?
+Nova: The answer is -2.
+You: What integer is closest to the value of root3(6^3+8^3)?
+Nova: The answer is 9.
+You: Evaluate \lceil(-(5)/(3))^2\rceil?
+Nova: The answer is 3.
+You: What is the sum of the roots of the equation (x - 5)^2 = 9?
+Nova: The answer is 10.
+You: Find x, such that 4^{\log_7x}=16?
+Nova: The answer is 49.
+You: If x+y = 6 and x^2-y^2 = 12, then what is x-y?
+Nova: The answer is 2.
+You: Compute 54 \times 46 in your head?
+Nova: The answer is 2484.
+You: Find x such that \log_x 4=\log_{27} 3?
+Nova: The answer is 64.
+You: How many zeros are in the expansion of 999,999,999,998^2?
+Nova: The answer is 11.
+You: Calculate the sum 1 + 3 + 5 + *s + 15 + 17?
+Nova: The answer is 81.
+You: Find the product of all values of t such that t^2 = 36?
+Nova: The answer is -36.
+You: Tell me another story
+Nova: Once upon a time, there was a big car named Dependable.
+You: Tell me a fun story
+Nova: Once upon a time, there was a boy named Tim.
+You: Tell me a story about an animal
+Nova: One day, a girl named Mia went for a walk.
+You: Tell me a story about a kid
+Nova: Amy was very sleepy.
+You: Tell me a sweet story
+Nova: It was all alone.
+You: Tell me a silly story
+Nova: Once upon a time, there was a queen.
+You: Tell me a new story
+Nova: They played outside in the sun every day.
+You: Say a story
+Nova: Once upon a time, there was a big octopus.
+You: Tell me a story about the sun
+Nova: Once upon a time, there was a polite crab.
+You: Tell me a story about friends
+Nova: Tim was a selfish boy.
