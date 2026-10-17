@@ -332,14 +332,18 @@ class Nova1Model {
     let ctx = seedIds && seedIds.length ? seedIds.slice(-T) : [];
     if (ctx.length === 0) ctx = [NovaTokenizer.BOS];
     const out = [];
+    let pendingTerm = false; // a sentence terminator waiting for a following space
     for (let t = 0; t < maxTokens; t++) {
       const id = tf.tidy(() => {
         const tokens2d = tf.tensor2d([ctx], [1, ctx.length], 'int32');
         const lg = this._forward(tokens2d);
         const last = tf.slice(lg, [0, ctx.length - 1, 0], [1, 1, this.vocabSize]);
-        return this._sampleFrom(last, temperature);
+        return this._sampleFrom(last.dataSync(), temperature);
       });
       if (id === NovaTokenizer.EOS) break;
+      const ch = this.tokenizer.decode([id]);
+      if (pendingTerm && (ch === ' ' || ch === '\n') && out.length >= 8) break; // sentence complete
+      pendingTerm = ch === '.' || ch === '!' || ch === '?';
       out.push(id);
       ctx = (ctx.length >= T ? ctx.slice(1) : ctx.slice()).concat([id]);
       if (onToken) {
