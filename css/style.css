@@ -664,3 +664,35 @@ textarea, input { font-family: inherit; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* deprecation notice (e.g. Nova 1.0 removal schedule) */
+.mc-deprecation {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #ffb454;
+  background: rgba(255, 180, 84, 0.08);
+  border: 1px solid rgba(255, 180, 84, 0.3);
+  border-radius: 8px;
+  padding: 5px 8px;
+}
+
+/* live thinking state while a model streams tokens */
+.msg.thinking .bubble {
+  border-color: rgba(124, 92, 255, 0.35);
+  animation: thinkPulse 1.4s ease-in-out infinite;
+}
+.thinking-label {
+  display: inline-block;
+  margin-right: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  animation: thinkFade 1.1s ease-in-out infinite;
+}
+@keyframes thinkPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(124, 92, 255, 0); }
+  50% { box-shadow: 0 0 14px 0 rgba(124, 92, 255, 0.35); }
+}
+@keyframes thinkFade {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}

@@ -316,6 +316,15 @@ class Nova1Model {
   // ------------------------------------------------------------------
 
   generate(maxTokens, temperature, seedIds) {
+    return this.generateAsync(maxTokens, temperature, seedIds, null);
+  }
+
+  /**
+   * Streaming generation: onToken(partialText) is called after every sampled
+   * token so the UI can show the model "thinking" live. Falls back to the
+   * same sampling rules as generate().
+   */
+  async generateAsync(maxTokens, temperature, seedIds, onToken) {
     const tf = this.TF;
     maxTokens = maxTokens || 200;
     temperature = temperature || 0.9;
@@ -324,17 +333,19 @@ class Nova1Model {
     if (ctx.length === 0) ctx = [NovaTokenizer.BOS];
     const out = [];
     for (let t = 0; t < maxTokens; t++) {
-      const logits = tf.tidy(() => {
-        const toks = tf.tensor2d([ctx], [1, ctx.length], 'int32');
-        const lg = this._forward(toks); // [1, n, V]
-        return tf.slice(lg, [0, ctx.length - 1, 0], [1, 1, this.vocabSize]);
+      const id = tf.tidy(() => {
+        const tokens2d = tf.tensor2d([ctx], [1, ctx.length], 'int32');
+        const lg = this._forward(tokens2d);
+        const last = tf.slice(lg, [0, ctx.length - 1, 0], [1, 1, this.vocabSize]);
+        return this._sampleFrom(last, temperature);
       });
-      const arr = logits.dataSync();
-      logits.dispose();
-      const id = this._sampleFrom(arr, temperature);
       if (id === NovaTokenizer.EOS) break;
-      if (id !== NovaTokenizer.PAD && id !== NovaTokenizer.BOS) out.push(id);
-      ctx = (ctx.length < T ? ctx.concat([id]) : ctx.slice(1).concat([id]));
+      out.push(id);
+      ctx = (ctx.length >= T ? ctx.slice(1) : ctx.slice()).concat([id]);
+      if (onToken) {
+        onToken(this.tokenizer.decode(out));
+        await new Promise((r) => setTimeout(r, 0)); // let the UI breathe
+      }
     }
     return this.tokenizer.decode(out);
   }

@@ -19,6 +19,7 @@ const MODELS = [
     project: 'nova',
     type: 'Custom, independently developed language model',
     status: 'Initial model',
+    deprecation: 'Being removed on November 1 — switch to Nova 1.5 or Supernova',
     arch: 'Tiny transformer (minGPT-style), ~64K parameters',
   },
   {
@@ -217,6 +218,7 @@ function renderModelMenu() {
         <div>Type: ${escapeHtml(m.type)}</div>
         <div>Status: ${escapeHtml(m.status)}</div>
         <div>${escapeHtml(m.arch)}</div>
+        ${m.deprecation ? `<div class="mc-deprecation">${escapeHtml(m.deprecation)}</div>` : ''}
         ${planned}
       </div>
       ${modelStatusHTML(m)}`;
@@ -352,6 +354,11 @@ function trimReply(text) {
       break;
     }
   }
+  if (cut < 0) {
+    // no sentence end in range: cut at the last word boundary, never mid-word
+    const sp = window.lastIndexOf(' ');
+    if (sp > 30) return window.slice(0, sp).trim();
+  }
   if (cut === -1) {
     const nl = window.indexOf('\n', 20);
     cut = nl !== -1 ? nl : 220;
@@ -396,8 +403,31 @@ async function handleSend() {
     // Generation seeds with your message: Nova continues it from its own
     // next-token predictions. Real sampling from real weights, never scripted.
     const seedIds = model.tokenizer.encode(text).slice(0, -1);
-    const maxTokens = Math.min(320, 60 + Math.floor(text.length / 2));
-    const out = trimReply(await sampleAsync(model, seedIds, maxTokens, 0.62));
+    const maxTokens = Math.min(340, 60 + Math.floor(text.length / 2));
+    // live thinking: stream tokens into the bubble as the model samples them
+    const liveRow = el('div', 'msg assistant thinking', `
+      <div class="avatar"><svg width="17" height="17" viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="lg3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#4dd6ff"/></linearGradient></defs><path fill="url(#lg3)" d="M16 1c1.4 8.2 5.4 12.2 14 14-8.6 1.8-12.6 5.8-14 14-1.4-8.2-5.4-12.2-14-14 8.6-1.8 12.6-5.8 14-14z"/></svg></div>
+      <div class="bubble"><span class="thinking-label">Thinking…</span></div>`);
+    $('chatInner').appendChild(liveRow);
+    scrollChat();
+    let lastPaint = 0;
+    const raw = await new Promise((resolve, reject) => {
+      setTimeout(() => {
+        model.generateAsync(maxTokens, 0.62, seedIds, (partial) => {
+          const now = Date.now();
+          if (now - lastPaint > 40) { // throttle paints
+            lastPaint = now;
+            const bubble = liveRow.querySelector('.bubble');
+            if (bubble && partial.trim()) {
+              bubble.innerHTML = '<span class="thinking-label">Thinking…</span>' + renderMarkdown(partial);
+            }
+            scrollChat();
+          }
+        }).then(resolve, reject);
+      }, 30);
+    });
+    liveRow.remove();
+    const out = trimReply(raw);
 
     let content;
     const clean = out.trim();
