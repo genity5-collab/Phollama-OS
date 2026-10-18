@@ -114,7 +114,7 @@ class NovaTokenizer:
 
     def encode(self, text, add_special_tokens=True):
         """Text -> list of token IDs."""
-        encoded = self.tokenizer.encode(text)
+        encoded = self.tokenizer.encode(text, add_special_tokens=add_special_tokens)
         return encoded.ids
 
     def decode(self, ids, skip_special=True):
