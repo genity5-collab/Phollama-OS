@@ -68,7 +68,7 @@ def download_chat_data():
     # TinyStories: simple, clean English stories
     print("Loading TinyStories...")
     try:
-        ds = load_dataset("roneneldan/TinyStories", split="train[:5000]")
+        ds = load_dataset("roneneldan/TinyStories", split="train[:20000]")
         for item in ds:
             story = item.get("text", "").strip()
             if len(story) > 50:
@@ -108,7 +108,7 @@ def download_code_data():
     # CodeAlpaca: instruction -> code pairs
     print("Loading CodeAlpaca...")
     try:
-        ds = load_dataset("sahil2801/CodeAlpaca-20k", split="train[:3000]")
+        ds = load_dataset("sahil2801/CodeAlpaca-20k", split="train[:20022]")
         for item in ds:
             instruction = item.get("instruction", "").strip()
             output      = item.get("output", "").strip()
