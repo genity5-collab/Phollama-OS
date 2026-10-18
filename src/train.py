@@ -9,6 +9,7 @@ import time
 import math
 import numpy as np
 import torch
+from contextlib import nullcontext
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.model import NovaGPT
@@ -134,20 +135,29 @@ def train(model_type="chat", resume=False):
     ], lr=config.learning_rate, betas=(0.9, 0.95))
 
     if resume and os.path.exists(checkpoint_path):
-        ckpt = torch.load(checkpoint_path, map_location=device)
+        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
         if 'optimizer_state' in ckpt:
             optimizer.load_state_dict(ckpt['optimizer_state'])
 
     # Mixed precision for GPU
-    scaler = torch.cuda.GradScaler() if device == "cuda" else None
-    ctx    = torch.autocast(device_type=device, dtype=torch.float16) \
-             if device == "cuda" else torch.nullcontext()
+    # (torch.cuda.GradScaler was removed in newer PyTorch -> torch.amp.GradScaler)
+    if device == "cuda":
+        try:
+            scaler = torch.amp.GradScaler("cuda")
+        except AttributeError:
+            scaler = torch.cuda.amp.GradScaler()
+        ctx = torch.autocast(device_type="cuda", dtype=torch.float16)
+    else:
+        scaler = None
+        ctx = nullcontext()
 
     # Training loop
     print(f"\nStarting training from step {start_step}...")
     print("-" * 60)
 
     best_val_loss = float('inf')
+    bad_evals = 0
+    patience = getattr(config, 'patience', 5)
     t0 = time.time()
 
     for step in range(start_step, config.max_steps):
@@ -172,6 +182,12 @@ def train(model_type="chat", resume=False):
                 best_val_loss = losses['val']
                 model.save_checkpoint(best_path, optimizer, step, losses['val'])
                 print(f"  New best val loss: {best_val_loss:.4f} -> saved best.pt")
+                bad_evals = 0
+            else:
+                bad_evals += 1
+                if bad_evals >= patience:
+                    print(f"  Val loss has not improved for {patience} evals -> early stop (overfitting).")
+                    break
 
         # Gradient accumulation
         optimizer.zero_grad()
