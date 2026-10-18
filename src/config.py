@@ -3,26 +3,27 @@
 # Change here, affects everything.
 
 class NovaChatConfig:
-    """Nova Chat 124M - general conversation model."""
-    model_name  = "nova-chat-124m"
+    """Nova Chat ~17M - general conversation model."""
+    model_name  = "nova-chat-17m"
     model_type  = "chat"
     vocab_size  = 8000
-    block_size  = 512
-    n_layer     = 12
-    n_head      = 8
-    n_embd      = 512
-    dropout     = 0.1
+    block_size  = 256
+    n_layer     = 8
+    n_head      = 6
+    n_embd      = 384
+    dropout     = 0.2
     bias        = False
 
     # Training
     batch_size          = 32
-    grad_accum_steps    = 4
+    grad_accum_steps    = 2
     learning_rate       = 3e-4
     min_lr              = 3e-5
-    warmup_steps        = 200
-    max_steps           = 10000
-    eval_interval       = 500
-    save_interval       = 1000
+    warmup_steps        = 100
+    max_steps           = 3000
+    eval_interval       = 100
+    save_interval       = 500
+    patience            = 6
     grad_clip           = 1.0
 
     # Data
@@ -32,30 +33,31 @@ class NovaChatConfig:
 
     # Output
     out_dir     = "checkpoints/nova-chat"
-    hf_repo     = "your-username/nova-chat-124m"  # CHANGE THIS
+    hf_repo     = "your-username/nova-chat-17m"  # CHANGE THIS
 
 
 class NovaCodeConfig:
-    """Nova Code 124M - coding assistant model."""
-    model_name  = "nova-code-124m"
+    """Nova Code ~17M - coding assistant model."""
+    model_name  = "nova-code-17m"
     model_type  = "code"
     vocab_size  = 8000
-    block_size  = 512
-    n_layer     = 12
-    n_head      = 8
-    n_embd      = 512
-    dropout     = 0.1
+    block_size  = 256
+    n_layer     = 8
+    n_head      = 6
+    n_embd      = 384
+    dropout     = 0.2
     bias        = False
 
     # Training
     batch_size          = 32
-    grad_accum_steps    = 4
+    grad_accum_steps    = 2
     learning_rate       = 3e-4
     min_lr              = 3e-5
-    warmup_steps        = 200
-    max_steps           = 10000
-    eval_interval       = 500
-    save_interval       = 1000
+    warmup_steps        = 100
+    max_steps           = 3000
+    eval_interval       = 100
+    save_interval       = 500
+    patience            = 6
     grad_clip           = 1.0
 
     # Data
@@ -65,7 +67,7 @@ class NovaCodeConfig:
 
     # Output
     out_dir     = "checkpoints/nova-code"
-    hf_repo     = "your-username/nova-code-124m"  # CHANGE THIS
+    hf_repo     = "your-username/nova-code-17m"  # CHANGE THIS
 
 
 def count_params(config):
