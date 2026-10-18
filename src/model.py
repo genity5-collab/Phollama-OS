@@ -208,9 +208,10 @@ class NovaGPT(nn.Module):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         checkpoint = {
             'model_state': self.state_dict(),
-            'config_dict': vars(self.config) if hasattr(self.config, '__dict__') else {
+            # vars(cls) is a mappingproxy that torch.save cannot pickle -> plain dict
+            'config_dict': {
                 k: getattr(self.config, k) for k in dir(self.config)
-                if not k.startswith('_')
+                if not k.startswith('_') and isinstance(getattr(self.config, k), (int, float, str, bool))
             },
             'step': step,
             'loss': loss,
@@ -223,7 +224,7 @@ class NovaGPT(nn.Module):
     @classmethod
     def load_checkpoint(cls, path, config):
         """Load model from checkpoint."""
-        checkpoint = torch.load(path, map_location='cpu')
+        checkpoint = torch.load(path, map_location='cpu', weights_only=False)
         model = cls(config)
         model.load_state_dict(checkpoint['model_state'])
         print(f"Loaded checkpoint: {path} (step {checkpoint.get('step',0)}, loss {checkpoint.get('loss',0):.4f})")
