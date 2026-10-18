@@ -5,8 +5,8 @@ Your architecture. Your data. Your weights.
 
 | Model | Size | Good at |
 |---|---|---|
-| Nova Chat | 124M params | General conversation |
-| Nova Code | 124M params | Coding help |
+| Nova Chat | ~17M params | General conversation |
+| Nova Code | ~17M params | Coding help |
 
 No pretrained weights. No external AI APIs.
 PyTorch transformer, BPE tokenizer, trained on Colab.
@@ -90,7 +90,7 @@ python eval/evaluate.py --model code
 
 ## Honest capability statement
 
-Nova Chat and Nova Code are 124M parameter models.
+Nova Chat and Nova Code are ~17M parameter models.
 They learn the patterns in their training data.
 They will make mistakes. They are not GPT-4.
 They are real, trainable, improvable, and 100% yours.
